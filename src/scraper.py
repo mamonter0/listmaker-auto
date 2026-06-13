@@ -548,6 +548,51 @@ class ListMaker:
         except Exception as e:
             print(f"No se pudo guardar el índice de artistas: {e}")
 
+    def _trim_delta_log_txt(self, keep_last: int = 20) -> None:
+        """Mantiene solo los últimos `keep_last` reportes en deltas.txt.
+
+        El archivo es append-only y crece sin freno. El Writer no lo lee
+        (usa deltas.jsonl), así que es seguro recortarlo — sirve solo como
+        log humano y los 20 últimos reportes son más que suficientes para
+        auditar.
+        """
+        try:
+            if not os.path.exists(DELTA_FILE):
+                return
+            with open(DELTA_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            marker = "Reporte de Cambios -"
+            positions = []
+            start = 0
+            while True:
+                idx = content.find(marker, start)
+                if idx == -1:
+                    break
+                positions.append(idx)
+                start = idx + len(marker)
+
+            if len(positions) <= keep_last:
+                return
+
+            cut_at = positions[-keep_last]
+            # Si justo antes del corte hay el separador "\n===...===\n", lo
+            # incluimos en el descarte para que el archivo empiece limpio.
+            prefix_sep = "\n" + "=" * 60 + "\n"
+            if content[max(0, cut_at - len(prefix_sep)) : cut_at] == prefix_sep:
+                cut_at -= len(prefix_sep)
+
+            trimmed = content[cut_at:].lstrip("\n")
+            with open(DELTA_FILE, "w", encoding="utf-8") as f:
+                f.write(trimmed)
+            removed = len(positions) - keep_last
+            print(
+                f"deltas.txt recortado: eliminados {removed} reportes antiguos, "
+                f"quedan los últimos {keep_last}."
+            )
+        except Exception as e:
+            print(f"No se pudo recortar deltas.txt: {e}")
+
     def save_and_compare_history(self):
         print("\n" + "=" * 60)
         print("GUARDANDO DATOS Y DELTAS EN EL HISTÓRICO...")
@@ -689,6 +734,8 @@ class ListMaker:
             else:
                 f.write(f"Reporte de Cambios - {timestamp}\nSin cambios detectados.\n")
                 print("Sin cambios.")
+
+        self._trim_delta_log_txt()
 
         try:
             with open(DELTA_JSONL_FILE, "a", encoding="utf-8") as f:
