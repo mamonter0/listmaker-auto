@@ -29,6 +29,7 @@ from .config import (
     MAX_PAGES_PER_LOOP,
     PENDING_CHAPTERS_FILE,
     WRITER_RATE_LIMIT_BACKOFF,
+    parse_artists_file,
 )
 
 
@@ -707,10 +708,9 @@ class Writer:
         # al ir descargando con éxito, y al final se persiste con lo que quede.
         pending = self._merge_pending_into_queue({}, queue)
 
-        artist_urls_list = []
-        if os.path.exists(ARTISTS_FILE):
-            with open(ARTISTS_FILE, "r", encoding="utf-8") as f:
-                artist_urls_list = [line.strip() for line in f if line.strip()]
+        # URLs limpias (sin el flag read_only) para el fallback de matching.
+        # Los artistas read_only nunca llegan a la queue de todos modos.
+        artist_urls_list = [url for url, _ in parse_artists_file(ARTISTS_FILE)]
         artists_index = self.load_artists_index()
 
         try:

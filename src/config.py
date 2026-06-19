@@ -42,3 +42,29 @@ MAX_PAGES_PER_LOOP = 300
 # si el writer aborta antes de tiempo (history.json ya tiene el cambio del scrape).
 RATE_LIMIT_BACKOFF = [5, 15, 45, 120]
 WRITER_RATE_LIMIT_BACKOFF = [30, 120, 300, 900, 1800]
+
+# Flag opcional al final de una línea de artists.txt. Un artista read_only se
+# scrapea y se registra en history.json/final_list.txt, pero sus capítulos
+# NUNCA se descargan: se funden en el histórico como si ya estuvieran guardados.
+READ_ONLY_FLAG = "read_only"
+
+
+def parse_artists_file(path):
+    """Lee artists.txt y devuelve lista de (url, read_only: bool).
+
+    Formato por línea: la URL, opcionalmente seguida de flags separados por
+    espacios. Hoy el único flag es `read_only`. Líneas vacías se ignoran.
+    """
+    entries = []
+    if not os.path.exists(path):
+        return entries
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            url = parts[0]
+            flags = parts[1:]
+            entries.append((url, READ_ONLY_FLAG in flags))
+    return entries

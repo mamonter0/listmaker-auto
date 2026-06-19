@@ -31,6 +31,7 @@ from .config import (
     OUTPUT_FILE,
     RATE_LIMIT_BACKOFF,
     SEEN_REMOVALS_FILE,
+    parse_artists_file,
 )
 
 
@@ -44,6 +45,8 @@ class ListMaker:
         self.scraped_data = {}
         self.failed_artists = []
         self.author_url_map = {}
+        self.read_only_urls = set()      # URLs marcadas read_only en artists.txt
+        self.read_only_authors = set()   # nombres de autor resueltos como read_only
 
     def _build_driver(self):
         options = Options()
@@ -349,10 +352,12 @@ class ListMaker:
 
         os.makedirs(LIST_DIR, exist_ok=True)
 
-        with open(ARTISTS_FILE, "r", encoding="utf-8") as f:
-            urls = [line.strip() for line in f if line.strip()]
+        entries = parse_artists_file(ARTISTS_FILE)
+        urls = [url for url, _ in entries]
+        self.read_only_urls = {url for url, ro in entries if ro}
 
-        print(f"Procesando {len(urls)} artistas...")
+        ro_count = len(self.read_only_urls)
+        print(f"Procesando {len(urls)} artistas ({ro_count} read_only)...")
 
         for url in urls:
             print("=" * 60)
@@ -388,6 +393,9 @@ class ListMaker:
                 print(f"Autor: {author_name}")
                 self.scraped_data[author_name] = {}
                 self.author_url_map[author_name] = url
+                if url in self.read_only_urls:
+                    self.read_only_authors.add(author_name)
+                    print("   (read_only — se registrará sin descargar)")
 
                 try:
                     postings_tab = self.wait.until(EC.element_to_be_clickable((By.ID, "recent-content")))
@@ -636,6 +644,21 @@ class ListMaker:
             if artist not in final_history:
                 final_history[artist] = {}
 
+            # read_only: fundir en history como "ya guardado", sin emitir delta
+            # ni reportar nada. Así final_list.txt queda completo pero el writer
+            # nunca ve estos capítulos en deltas.jsonl → no se descargan.
+            if artist in self.read_only_authors:
+                for th_title, chapters in threads.items():
+                    if th_title not in final_history[artist]:
+                        final_history[artist][th_title] = list(chapters)
+                    else:
+                        existing = final_history[artist][th_title]
+                        existing_set = set(existing)
+                        for ch in chapters:
+                            if ch not in existing_set:
+                                existing.append(ch)
+                continue
+
             if artist not in old_data:
                 deltas.append(f"\n[+] NUEVO ARTISTA: {artist}")
                 structured["artists_added"][artist] = {}
@@ -679,6 +702,8 @@ class ListMaker:
         for artist, old_threads in old_data.items():
             if artist not in self.scraped_data:
                 continue
+            if artist in self.read_only_authors:
+                continue  # read_only: silencioso también para eliminaciones
             new_threads = self.scraped_data[artist]
 
             # Threads desaparecidos
