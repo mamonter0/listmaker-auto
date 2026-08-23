@@ -15,6 +15,7 @@ USO:
     python scripts/backfill_pdf_dates.py --limit 20       # prueba con pocos hilos
 """
 import argparse
+import difflib
 import json
 import os
 import re
@@ -30,12 +31,14 @@ from selenium.webdriver.support import expected_conditions as EC
 
 from src.bootstrap import bootstrap_state
 from src.config import (
+    ARTISTS_FILE,
     ARTISTS_FOLDER_ID,
     ARTISTS_INDEX_FILE,
     DRIVE_TARGET_FOLDER,
     LISTS_FOLDER,
     MAX_PAGES_PER_LOOP,
     PARENT_DRIVE_ID,
+    parse_artists_file,
 )
 from src.drive_auth import get_drive
 from src.writer import Writer
@@ -205,10 +208,16 @@ def main():
         groups.setdefault((f["artist"], f["thread"]), []).append(f)
     print(f"Hilos afectados: {len(groups)}\n")
 
-    if not os.path.exists(ARTISTS_INDEX_FILE):
-        sys.exit(f"Falta {ARTISTS_INDEX_FILE} (lanza scripts/download.py antes).")
-    with open(ARTISTS_INDEX_FILE, "r", encoding="utf-8") as fh:
-        artists_index = json.load(fh)
+    artists_index = {}
+    if os.path.exists(ARTISTS_INDEX_FILE):
+        with open(ARTISTS_INDEX_FILE, "r", encoding="utf-8") as fh:
+            artists_index = json.load(fh)
+    else:
+        print(f"Aviso: falta {ARTISTS_INDEX_FILE}, tiro solo de artists.txt")
+
+    # Fallback: artists.txt. El indice solo tiene los autores vistos en runs
+    # recientes; los PDFs viejos pueden ser de autores que no estan ahi.
+    artist_urls = [u for u, _ in parse_artists_file(ARTISTS_FILE)]
 
     w = Writer()
     # carpeta_saneada -> url de perfil
@@ -229,9 +238,12 @@ def main():
             processed += 1
             print(f"\n[{processed}/{len(groups)}] {artist} / {thread}  ({len(files)} PDFs)")
 
-            profile = by_folder.get(artist)
+            # 1) indice exacto  2) fallback por substring contra artists.txt
+            profile = by_folder.get(artist) or w.resolve_artist_url(
+                artist, artists_index, artist_urls
+            )
             if not profile:
-                print("   sin URL de perfil en artists_index.json — salto")
+                print("   sin URL de perfil (ni en el indice ni en artists.txt) — salto")
                 stats["no_thread"] += len(files)
                 continue
 
@@ -240,7 +252,15 @@ def main():
                     w.sanitize_filename(t): u
                     for t, u in w.find_thread_urls_for_artist(profile).items()
                 }
-            thread_url = thread_cache[artist].get(thread)
+            threads_found = thread_cache[artist]
+            thread_url = threads_found.get(thread)
+            if not thread_url:
+                # El titulo pudo cambiar desde que se descargo (tags editados,
+                # puntuacion...). Buscamos el mas parecido antes de rendirnos.
+                near = difflib.get_close_matches(thread, list(threads_found), n=1, cutoff=0.80)
+                if near:
+                    thread_url = threads_found[near[0]]
+                    print(f"   titulo cambiado, uso el mas parecido: '{near[0]}'")
             if not thread_url:
                 print("   hilo no encontrado en el perfil — salto")
                 stats["no_thread"] += len(files)
