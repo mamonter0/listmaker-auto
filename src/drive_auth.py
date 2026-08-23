@@ -42,7 +42,23 @@ def _get_drive_oauth(client_id: str, client_secret: str, refresh_token: str) -> 
         user_agent=None,
         revoke_uri=None,
     )
-    gauth = GoogleAuth(settings={"oauth_scope": _OAUTH_SCOPE})
+    # El client_config va en settings para que PyDrive2 pueda renovar el access
+    # token por su cuenta cuando caduque (~1h). Sin esto, cualquier llamada
+    # posterior a la primera hora revienta con KeyError 'client_config_file'
+    # al intentar releer la config de un fichero que no existe.
+    gauth = GoogleAuth(settings={
+        "client_config_backend": "settings",
+        "client_config": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": _TOKEN_URI,
+            "revoke_uri": None,
+            "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
+        },
+        "oauth_scope": _OAUTH_SCOPE,
+        "save_credentials": False,
+    })
     gauth.credentials = creds
     gauth.Refresh()  # mint an access token from the refresh token immediately
     return GoogleDrive(gauth)
