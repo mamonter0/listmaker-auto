@@ -148,6 +148,34 @@ class Writer:
     def sanitize_filename(name):
         return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
+    @staticmethod
+    def _chapter_already_saved(dirpath, safe_ch):
+        """True si ya existe un PDF de ese capitulo, en formato nuevo o viejo.
+
+        Formato nuevo:  2024-03-15_10-23_Titulo.pdf   (fecha delante)
+        Formato viejo:  Titulo_2024-03-15_10-23.pdf   (fecha detras)
+        Sin fecha:      Titulo.pdf
+
+        Comparamos el titulo completo, no por prefijo: el `startswith` de antes
+        daba falso positivo entre "Chapter 1" y "Chapter 10_2024-...", y se
+        saltaba capitulos que nunca llegaron a descargarse.
+        """
+        if not os.path.isdir(dirpath):
+            return False
+        date_re = re.compile(r"^\d{4}-\d{2}-\d{2}(?:_\d{2}-\d{2})?_(?P<name>.+)$")
+        for fn in os.listdir(dirpath):
+            if not fn.lower().endswith(".pdf"):
+                continue
+            stem = fn[:-4]
+            m = date_re.match(stem)
+            if m and m.group("name") == safe_ch:
+                return True  # formato nuevo
+            if stem == safe_ch:
+                return True  # sin fecha
+            if stem.startswith(safe_ch + "_"):
+                return True  # formato viejo
+        return False
+
     def get_post_datetime(self):
         try:
             js = """
@@ -778,15 +806,10 @@ class Writer:
                             final_save_dir = os.path.join(base_save_dir, safe_cat)
                             os.makedirs(final_save_dir, exist_ok=True)
 
-                        if os.path.isdir(final_save_dir):
-                            existing = [
-                                fn for fn in os.listdir(final_save_dir)
-                                if fn.startswith(safe_ch) and fn.endswith(".pdf")
-                            ]
-                            if existing:
-                                # Ya descargado en este mismo run (raro) o anterior crash.
-                                self._mark_done(pending, artist_name, thread_title, chap_name)
-                                continue
+                        if self._chapter_already_saved(final_save_dir, safe_ch):
+                            # Ya descargado en este mismo run (raro) o anterior crash.
+                            self._mark_done(pending, artist_name, thread_title, chap_name)
+                            continue
 
                         print(f"      [{i+1}/{len(to_download)}] ({cat_name}) Descargando: {chap_name}")
 
@@ -797,8 +820,12 @@ class Writer:
                                 continue
                             time.sleep(2 + random.uniform(0.5, 1.5))
                             post_dt = self.get_post_datetime()
-                            date_suffix = f"_{post_dt}" if post_dt else ""
-                            pdf_path = os.path.join(final_save_dir, f"{safe_ch}{date_suffix}.pdf")
+                            # Fecha DELANTE: asi el orden alfabetico del explorador
+                            # (y de Drive) coincide con el orden cronologico. Con la
+                            # fecha al final ordenaba por titulo y "Chapter Ten" salia
+                            # antes que "Chapter Two".
+                            date_prefix = f"{post_dt}_" if post_dt else ""
+                            pdf_path = os.path.join(final_save_dir, f"{date_prefix}{safe_ch}.pdf")
                             self.isolate_and_print(pdf_path)
                             # Éxito: descontar de pending.
                             self._mark_done(pending, artist_name, thread_title, chap_name)
