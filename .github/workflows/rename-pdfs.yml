@@ -1,0 +1,53 @@
+name: rename-pdfs-datefirst
+
+# Migracion puntual: renombra los PDFs ya subidos a Drive de
+#   Titulo_FECHA.pdf  ->  FECHA_Titulo.pdf
+# Se lanza a mano. Por defecto va en dry-run: hay que marcar 'apply' para
+# que toque nada. Corre aqui y no en local para reutilizar los secrets del
+# repo (no hace falta configurar credenciales en tu PC).
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Aplicar los cambios de verdad (si se deja desmarcado, solo lista lo que haria)"
+        type: boolean
+        default: false
+
+# No pisarse con el pipeline principal: ambos tocan los mismos ficheros de Drive.
+concurrency:
+  group: listmaker
+  cancel-in-progress: false
+
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+      GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+      GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+      GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
+      ARTISTS_FOLDER_ID: ${{ secrets.ARTISTS_FOLDER_ID }}
+      # config.py aborta si no esta definida, aunque este script no navegue el foro
+      FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Dry run (listar cambios)
+        if: ${{ !inputs.apply }}
+        run: python scripts/rename_pdfs_datefirst.py
+
+      - name: Apply (renombrar de verdad)
+        if: ${{ inputs.apply }}
+        run: python scripts/rename_pdfs_datefirst.py --apply
