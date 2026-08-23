@@ -1,0 +1,65 @@
+name: backfill-pdf-dates
+
+# Recupera del foro la fecha de los PDFs guardados sin ella y los renombra en
+# Drive. Manual y dry-run por defecto.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Renombrar de verdad (si se deja desmarcado, solo lista)"
+        type: boolean
+        default: false
+      limit:
+        description: "Procesar solo N hilos (0 = todos). Util para probar."
+        type: string
+        default: "0"
+      visit_missing:
+        description: "Si el indice del hilo no da fecha, abrir el post del capitulo (mas lento)"
+        type: boolean
+        default: false
+
+# Mismo grupo que el pipeline: navegan el mismo foro y tocan los mismos ficheros.
+concurrency:
+  group: listmaker
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    env:
+      GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+      GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+      GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+      GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
+      ARTISTS_FOLDER_ID: ${{ secrets.ARTISTS_FOLDER_ID }}
+      FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
+      FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
+      ARTISTS_TXT_B64: ${{ secrets.ARTISTS_TXT_B64 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify Chrome
+        run: google-chrome --version
+
+      # Necesitamos lists/artists_index.json para mapear carpeta -> perfil.
+      - name: Download state from Drive
+        run: python scripts/download.py
+
+      - name: Backfill dates
+        run: |
+          python scripts/backfill_pdf_dates.py \
+            ${{ inputs.apply && '--apply' || '' }} \
+            ${{ inputs.visit_missing && '--visit-missing' || '' }} \
+            --limit ${{ inputs.limit }}
