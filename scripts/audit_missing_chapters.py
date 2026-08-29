@@ -141,6 +141,12 @@ def main():
 
             # Carpetas de Drive de este autor (para casar titulos que cambiaron)
             drive_folders = [t for (a, t) in have if a == folder]
+            print(f"   carpeta Drive '{folder}': {len(drive_folders)} hilos | foro: {len(threads)} hilos")
+            if not drive_folders:
+                # Nada bajo ese nombre: puede que la carpeta se llame distinto.
+                todas = sorted({a for (a, _t) in have})
+                cerca = difflib.get_close_matches(folder, todas, n=3, cutoff=0.6)
+                print(f"   !! sin carpeta en Drive para '{folder}'. Parecidas: {cerca}")
 
             for th_title, th_url in threads.items():
                 stats["threads"] += 1
@@ -148,7 +154,15 @@ def main():
                 stem_set = have.get((folder, th_folder))
                 if stem_set is None:
                     near = difflib.get_close_matches(th_folder, drive_folders, n=1, cutoff=0.80)
-                    stem_set = have.get((folder, near[0]), set()) if near else set()
+                    if near:
+                        print(f"   ~ '{th_folder}' -> carpeta '{near[0]}'")
+                        stem_set = have.get((folder, near[0]), set())
+                    else:
+                        # Sin carpeta: o nunca se bajo, o el nombre no casa.
+                        cand = difflib.get_close_matches(th_folder, drive_folders, n=2, cutoff=0.5)
+                        print(f"   ?? sin carpeta para '{th_folder}'"
+                              + (f" (parecidas: {cand})" if cand else " (ninguna parecida)"))
+                        stem_set = set()
 
                 chapters = w.get_all_chapter_urls(th_url)
                 stats["chapters"] += len(chapters)
