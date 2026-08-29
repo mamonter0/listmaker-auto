@@ -11,7 +11,7 @@ on:
         type: string
         default: "0"
       artist:
-        description: "Filtrar por subcadena del perfil (vacio = todos)"
+        description: "Filtrar por subcadena(s) del perfil, separadas por coma (vacio = todos)"
         type: string
         default: ""
 

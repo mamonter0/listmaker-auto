@@ -107,7 +107,11 @@ def main():
 
     entries = parse_artists_file(ARTISTS_FILE)
     if args.artist:
-        entries = [e for e in entries if args.artist.lower() in e[0].lower()]
+        # Acepta varios separados por coma: "fakeking,infonticus"
+        wanted = [a.strip().lower() for a in args.artist.split(",") if a.strip()]
+        entries = [e for e in entries if any(a in e[0].lower() for a in wanted)]
+        if not entries:
+            sys.exit(f"Ningun perfil de artists.txt casa con {wanted}")
     if args.limit:
         entries = entries[: args.limit]
     print(f"Auditando {len(entries)} autores...\n")
