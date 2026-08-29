@@ -1,0 +1,67 @@
+name: audit-missing-chapters
+
+# Cruza el indice de threadmarks del foro contra los PDFs que hay en Drive
+# y reporta los huecos. Solo lectura: no descarga ni modifica nada.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Solo los primeros N autores (0 = todos)"
+        type: string
+        default: "0"
+      artist:
+        description: "Filtrar por subcadena del perfil (vacio = todos)"
+        type: string
+        default: ""
+
+concurrency:
+  group: listmaker
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    env:
+      GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+      GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+      GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+      GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
+      ARTISTS_FOLDER_ID: ${{ secrets.ARTISTS_FOLDER_ID }}
+      FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
+      FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
+      ARTISTS_TXT_B64: ${{ secrets.ARTISTS_TXT_B64 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify Chrome
+        run: google-chrome --version
+
+      - name: Download state from Drive
+        run: python scripts/download.py
+
+      - name: Audit
+        run: |
+          python scripts/audit_missing_chapters.py \
+            --limit ${{ inputs.limit }} \
+            ${{ inputs.artist && format('--artist "{0}"', inputs.artist) || '' }}
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: missing-chapters
+          path: lists/missing_chapters.json
+          if-no-files-found: warn
+          retention-days: 30
