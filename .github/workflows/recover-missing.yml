@@ -1,0 +1,85 @@
+name: recover-missing
+
+# Recupera por tandas los capitulos que faltan en Drive. Corre solo cada noche
+# hasta vaciar la cola; cuando no queda nada, termina sin hacer trabajo.
+# No depende de nadie: una vez arrancado sigue por su cuenta.
+
+on:
+  schedule:
+    # 22:00 UTC — lejos del pipeline principal (04:00) para no solaparse.
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+    inputs:
+      artists:
+        description: "Subcadenas de perfil separadas por coma (solo se usa al construir la cola)"
+        type: string
+        default: "fakeking,sir-lucifer-morningstar,infonticus,wiererid"
+      batch:
+        description: "Capitulos por ejecucion"
+        type: string
+        default: "200"
+      rebuild:
+        description: "Reconstruir la cola desde cero (descarta el avance)"
+        type: boolean
+        default: false
+
+# Mismo grupo que el pipeline: comparten foro y ficheros de Drive.
+concurrency:
+  group: listmaker
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    env:
+      GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+      GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+      GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+      GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
+      ARTISTS_FOLDER_ID: ${{ secrets.ARTISTS_FOLDER_ID }}
+      FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
+      FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
+      ARTISTS_TXT_B64: ${{ secrets.ARTISTS_TXT_B64 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify Chrome
+        run: google-chrome --version
+
+      # Trae lists/ (cookies, artists_index.json y la cola de recuperacion).
+      - name: Download state from Drive
+        id: download
+        run: python scripts/download.py
+
+      - name: Recover a batch
+        id: recover
+        continue-on-error: true
+        run: |
+          python scripts/recover_missing.py \
+            --artists "${{ inputs.artists || 'fakeking,sir-lucifer-morningstar,infonticus,wiererid' }}" \
+            --batch ${{ inputs.batch || '200' }} \
+            ${{ inputs.rebuild && '--rebuild' || '' }}
+
+      # Sube los PDFs nuevos y la cola actualizada. Corre aunque la tanda haya
+      # fallado a medias: lo descargado hasta ese punto es valido y la cola ya
+      # esta guardada, asi que no queremos perderlo.
+      - name: Upload to Drive
+        if: steps.download.outcome == 'success'
+        run: python scripts/upload.py
+
+      - name: Mark failed if the batch errored
+        if: steps.recover.outcome == 'failure'
+        run: |
+          echo "recover outcome: ${{ steps.recover.outcome }}"
+          exit 1
