@@ -28,6 +28,13 @@ concurrency:
   group: listmaker
   cancel-in-progress: false
 
+# actions:write para que, al verificar que ya no falta nada, pueda desactivar
+# su propio cron. Si luego quieres recuperar mas autores:
+#   gh workflow enable recover-missing.yml
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   recover:
     runs-on: ubuntu-latest
@@ -77,6 +84,16 @@ jobs:
       - name: Upload to Drive
         if: steps.download.outcome == 'success'
         run: python scripts/upload.py
+
+      # Solo cuando Drive confirma que no falta nada: apaga el cron para no
+      # seguir arrancando un runner cada noche sin trabajo.
+      - name: Disable schedule once verified complete
+        if: steps.recover.outputs.completed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Recuperacion verificada como completa: desactivo el cron."
+          gh workflow disable recover-missing.yml --repo "${{ github.repository }}"
 
       - name: Mark failed if the batch errored
         if: steps.recover.outcome == 'failure'

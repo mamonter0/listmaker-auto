@@ -1,23 +1,31 @@
 """Recupera por tandas los capitulos que faltan en Drive.
 
 Pensado para correr desatendido en un cron: cada ejecucion se come un trozo de
-la cola, guarda el avance en Drive y se para. Al vaciarse la cola no hace nada.
+la cola, guarda el avance en Drive y se para.
 
 Estado en `lists/recovery_queue.json` (lo sincronizan download.py / upload.py):
     {
-      "artists":  ["fakeking", ...],     # filtros con los que se construyo
-      "built_at": "2026-08-30 12:00:00",
-      "pending":  [ {artist, thread, chapter, url, category}, ... ],
-      "done":     123                    # contador acumulado
+      "artists":       ["fakeking", ...],   # filtros con los que se construyo
+      "built_at":      "2026-08-30 12:00:00",
+      "pending":       [ {artist, thread, chapter, url, category, attempts}, ... ],
+      "failed":        [ ... ],             # dados por perdidos tras MAX_ATTEMPTS
+      "done":          123,                 # contador acumulado
+      "verifications": 1,                   # veces que se re-audito al vaciarse
+      "completed_at":  "2026-09-18 22:30"   # solo cuando Drive confirma que no falta nada
     }
 
-La cola se construye sola en la primera ejecucion (auditando el foro contra
-Drive) y a partir de ahi solo se consume.
+Como sabe que ha terminado: NO basta con que la cola se vacie. La cola solo sabe
+lo que ella misma tacho, y tacha un capitulo en cuanto el PDF existe en el disco
+del runner; la subida a Drive es un paso posterior que puede fallar. Por eso,
+cuando la cola se queda vacia, la siguiente ejecucion vuelve a auditar el foro
+contra Drive. Si sigue faltando algo, lo reencola. Solo cuando la auditoria da
+cero se marca `completed_at`, y a partir de ahi cada ejecucion sale al instante
+(el workflow ademas desactiva su propio cron).
 
 USO:
     python scripts/recover_missing.py --artists "fakeking,infonticus" --batch 200
     python scripts/recover_missing.py --batch 200          # sigue la cola existente
-    python scripts/recover_missing.py --rebuild            # reconstruye la cola
+    python scripts/recover_missing.py --rebuild --artists "..."   # empieza de cero
 """
 import argparse
 import json
@@ -44,6 +52,24 @@ from src.writer import Writer
 
 QUEUE_FILE = os.path.join(LIST_DIR, "recovery_queue.json")
 
+# Un capitulo que falla estas veces (en noches distintas) se da por perdido.
+MAX_ATTEMPTS = 3
+# Re-auditorias maximas al vaciarse la cola. Evita un bucle eterno si algo se
+# descarga bien pero nunca llega a Drive.
+MAX_VERIFICATIONS = 3
+
+
+def now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def set_output(key, value):
+    """Pasa un valor a los pasos siguientes del workflow (solo en Actions)."""
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{key}={value}\n")
+
 
 def load_queue():
     if not os.path.exists(QUEUE_FILE):
@@ -65,9 +91,25 @@ def save_queue(q):
     os.replace(tmp, QUEUE_FILE)  # atomico: nunca dejar la cola a medio escribir
 
 
+def register_failure(queue, pending, item):
+    """Cuenta un intento fallido. Devuelve 1 si el capitulo se da por perdido.
+
+    Si aun le quedan intentos lo manda al FINAL de la cola: cada tanda coge la
+    cabeza, y un capitulo roto que se quedara delante bloquearia a los demas.
+    """
+    item["attempts"] = item.get("attempts", 0) + 1
+    pending.remove(item)
+    if item["attempts"] >= MAX_ATTEMPTS:
+        queue.setdefault("failed", []).append(item)
+        print(f"   {MAX_ATTEMPTS} intentos fallidos: se da por perdido")
+        return 1
+    pending.append(item)
+    return 0
+
+
 def build_queue(w, drive, artist_filters):
     """Audita el foro contra Drive y devuelve la cola de capitulos que faltan."""
-    # Import diferido: solo hace falta al construir, no al consumir.
+    # Import diferido: solo hace falta al construir o verificar, no al consumir.
     from scripts.audit_missing_chapters import find_root, index_drive  # noqa: E402
     import difflib
 
@@ -77,8 +119,9 @@ def build_queue(w, drive, artist_filters):
 
     entries = parse_artists_file(ARTISTS_FILE)
     wanted = [a.strip().lower() for a in artist_filters if a.strip()]
-    if wanted:
-        entries = [e for e in entries if any(a in e[0].lower() for a in wanted)]
+    if not wanted:
+        sys.exit("build_queue necesita al menos un filtro de artista.")
+    entries = [e for e in entries if any(a in e[0].lower() for a in wanted)]
     if not entries:
         sys.exit(f"Ningun perfil casa con {wanted}")
     print(f"Auditando {len(entries)} autores...\n")
@@ -132,10 +175,20 @@ def build_queue(w, drive, artist_filters):
 
     return {
         "artists": wanted,
-        "built_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "built_at": now(),
         "pending": pending,
+        "failed": [],
         "done": 0,
+        "verifications": 0,
     }
+
+
+def verify(w, queue):
+    """Re-audita Drive. Devuelve lo que sigue faltando, sin los ya perdidos."""
+    from src.drive_auth import get_drive
+    fresh = build_queue(w, get_drive(), queue.get("artists", []))
+    lost = {it["url"] for it in queue.get("failed", [])}
+    return [it for it in fresh["pending"] if it["url"] not in lost]
 
 
 def download_one(w, item, pause_min, pause_max):
@@ -183,8 +236,15 @@ def main():
     args = ap.parse_args()
 
     bootstrap_state()
-
     queue = None if args.rebuild else load_queue()
+
+    # Terminada y verificada: salir antes de arrancar Chrome o tocar el foro.
+    if queue is not None and queue.get("completed_at"):
+        print(f"Recuperacion terminada y verificada el {queue['completed_at']}. Nada que hacer.")
+        set_output("completed", "true")
+        return
+
+    ok = fail = lost = 0
     w = Writer()
     try:
         if not w.load_cookies():
@@ -200,14 +260,42 @@ def main():
             print(f"\nCola construida: {len(queue['pending'])} capitulos pendientes.")
 
         pending = queue.get("pending", [])
+
         if not pending:
-            print("Cola vacia: no queda nada por recuperar.")
-            return
+            # La cola dice que esta todo, pero solo sabe lo que ella misma tacho.
+            # Ahora los PDFs de la tanda anterior ya estan subidos: comprobamos Drive.
+            print("Cola vacia. Verificando contra Drive que no falta nada...")
+            still = verify(w, queue)
+            queue["verifications"] = queue.get("verifications", 0) + 1
+
+            if not still:
+                queue["completed_at"] = now()
+                save_queue(queue)
+                set_output("completed", "true")
+                print(f"Verificado: todo esta en Drive "
+                      f"({len(queue.get('failed', []))} dados por perdidos). Terminado.")
+                return
+
+            if queue["verifications"] >= MAX_VERIFICATIONS:
+                # Se descargan pero no aparecen en Drive tras varias vueltas:
+                # algo sistematico, no insistimos para siempre.
+                for it in still:
+                    it["reason"] = "no llega a Drive tras varias verificaciones"
+                queue.setdefault("failed", []).extend(still)
+                queue["completed_at"] = now()
+                save_queue(queue)
+                set_output("completed", "true")
+                print(f"{len(still)} siguen sin aparecer tras {MAX_VERIFICATIONS} "
+                      f"verificaciones; pasan a 'failed'. Terminado.")
+                return
+
+            print(f"La verificacion encontro {len(still)} que siguen faltando; se reencolan.")
+            queue["pending"] = pending = still
+            save_queue(queue)
 
         batch = pending[: args.batch]
         print(f"\nPendientes: {len(pending)} | esta tanda: {len(batch)}\n")
 
-        ok = fail = 0
         try:
             for n, item in enumerate(batch, 1):
                 print(f"[{n}/{len(batch)}] {item['artist']} / {item['thread']} / {item['chapter']}")
@@ -216,14 +304,16 @@ def main():
                         ok += 1
                         pending.remove(item)
                     else:
-                        fail += 1  # se queda en la cola para el proximo run
+                        fail += 1
+                        lost += register_failure(queue, pending, item)
                 except RuntimeError as e:
-                    # Rate limit persistente: paramos la tanda y guardamos.
+                    # Rate limit persistente: paramos la tanda sin castigar al capitulo.
                     print(f"   Abortando tanda: {e}")
                     break
                 except WebDriverException as e:
                     print(f"   Error de driver: {type(e).__name__}")
                     fail += 1
+                    lost += register_failure(queue, pending, item)
                     if not w._driver_alive() and not w._recover_driver():
                         break
         finally:
@@ -235,9 +325,12 @@ def main():
 
     print("\n" + "=" * 55)
     print(f"Descargados en esta tanda : {ok}")
-    print(f"Fallidos (siguen en cola) : {fail}")
+    print(f"Fallidos (se reintentan)  : {fail - lost}")
+    print(f"Dados por perdidos        : {lost} (total {len(queue.get('failed', []))})")
     print(f"Quedan pendientes         : {len(queue.get('pending', []))}")
     print(f"Acumulado total           : {queue.get('done', 0)}")
+    if not queue.get("pending"):
+        print("Cola vacia: la proxima ejecucion verificara contra Drive.")
     print("=" * 55)
 
 
