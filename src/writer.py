@@ -75,6 +75,18 @@ class Writer:
 
     def _check_rate_limit(self):
         try:
+            # Una pagina con estructura de contenido del foro (post, indice de
+            # threadmarks, resultados de busqueda, perfil) se ha cargado bien:
+            # NO es un bloqueo, diga lo que diga su texto. El texto de un
+            # capitulo puede contener "slow down" o "rate limit" — Chapter 49 de
+            # "Collecting Waifus throughout the Multiverse" (Sramon) tumbo dos
+            # runs seguidos con 52 min de espera cada uno por eso. Las paginas
+            # de bloqueo reales (nginx, Cloudflare) no traen esta estructura.
+            if self.driver.find_elements(
+                By.CSS_SELECTOR,
+                ".bbWrapper, article.message, .structItem, .contentRow, .memberHeader",
+            ):
+                return False
             title = (self.driver.title or "").lower()
             body = self.driver.find_element(By.TAG_NAME, "body").text[:1500].lower()
         except Exception:
