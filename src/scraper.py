@@ -183,7 +183,10 @@ class ListMaker:
         except Exception:
             return "logged_out", "no se pudo leer la pagina"
         low_url, low_title = url.lower(), title.lower()
-        desc = f"{title[:60]!r} en {url.replace(BASE_URL, '/')}"
+        # Sin query string: en un bucle de redireccion _xfRedirect crece hasta
+        # miles de caracteres y deja el log ilegible.
+        path = url.split("?", 1)[0].replace(BASE_URL, "/")
+        desc = f"{title[:60]!r} en {path}"
 
         if "/login/two-step" in low_url:
             return "two_step", desc
