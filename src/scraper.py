@@ -154,11 +154,49 @@ class ListMaker:
                     self.driver.add_cookie(cookie)
             self.driver.refresh()
             time.sleep(2)
-            print("Cookies cargadas.")
-            return True
         except Exception as e:
             print(f"Error cookies: {e}")
             return False
+
+        # Comprobar a donde nos ha llevado la sesion. Con cookies caducadas el
+        # foro no muestra error: redirige a la verificacion en dos pasos o al
+        # login, y cada perfil acaba en timeout (43 x 15s sin decir por que).
+        kind, desc = self._describe_page()
+        if kind in ("two_step", "login"):
+            print(f"COOKIES CADUCADAS: el foro pide volver a iniciar sesion ({desc}).")
+            print("Regenera las cookies con cookiesExtractor y actualiza FORUM_COOKIES_B64.")
+            return False
+        if kind == "challenge":
+            print(f"BLOQUEO: el foro devuelve una pagina de desafio anti-bot ({desc}).")
+            return False
+        print(f"Cookies cargadas. Sesion: {desc}")
+        return True
+
+    def _describe_page(self):
+        """Clasifica la pagina actual: (tipo, descripcion legible).
+
+        tipo: two_step | login | challenge | logged_in | logged_out
+        """
+        try:
+            url = self.driver.current_url or ""
+            title = (self.driver.title or "").strip()
+        except Exception:
+            return "logged_out", "no se pudo leer la pagina"
+        low_url, low_title = url.lower(), title.lower()
+        desc = f"{title[:60]!r} en {url.replace(BASE_URL, '/')}"
+
+        if "/login/two-step" in low_url:
+            return "two_step", desc
+        if "/login" in low_url:
+            return "login", desc
+        if any(s in low_title for s in ("just a moment", "attention required", "access denied")):
+            return "challenge", desc
+        try:
+            if self.driver.find_elements(By.CSS_SELECTOR, "a[href*='/logout']"):
+                return "logged_in", "con sesion iniciada"
+        except Exception:
+            pass
+        return "logged_out", "sin sesion iniciada (" + desc + ")"
 
     def safe_click(self, element):
         try:
@@ -392,8 +430,9 @@ class ListMaker:
                     )
                     author_name = username_el.text.strip()
                 except TimeoutException:
-                    print(f"Perfil no cargó (posible baneo / cuenta eliminada): {url}")
-                    self._register_failure(url, "profile_timeout")
+                    kind, desc = self._describe_page()
+                    print(f"Perfil no cargó: {url}\n   pagina real: [{kind}] {desc}")
+                    self._register_failure(url, f"profile_timeout:{kind}", desc)
                     continue
                 except WebDriverException as e:
                     print(f"Error de driver cargando perfil {url}: {type(e).__name__}")
@@ -501,9 +540,20 @@ class ListMaker:
         total = len(urls)
         failed = len(self.failed_artists)
         if total >= 5 and failed / total > 0.5:
+            # Si la mayoria de perfiles acabaron en la misma pagina, lo decimos.
+            kinds = {}
+            for f in self.failed_artists:
+                k = f.get("reason", "").split(":", 1)[-1]
+                kinds[k] = kinds.get(k, 0) + 1
+            top = max(kinds, key=kinds.get) if kinds else ""
+            causa = {
+                "two_step": "cookies caducadas (el foro pide verificacion en dos pasos)",
+                "login": "cookies caducadas (el foro pide iniciar sesion)",
+                "challenge": "el foro esta bloqueando la IP con un desafio anti-bot",
+            }.get(top, "cookies caducadas, foro cambió o IP bloqueada")
             raise RuntimeError(
                 f"Tasa de fallos {failed}/{total} ({failed/total:.0%}) > 50%. "
-                "Posibles causas: cookies caducadas, foro cambió, IP bloqueada."
+                f"Causa probable: {causa}."
             )
 
     def save_failed_report(self):
