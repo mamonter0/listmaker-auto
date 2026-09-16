@@ -2,19 +2,60 @@ name: listmaker
 
 on:
   schedule:
-    # 04:00 UTC diario
-    - cron: "0 4 * * *"
+    # Dos pasadas al dia, a las 09:00 y a las 22:30 hora de Madrid.
+    # El cron de GitHub va en UTC y no conoce el horario de verano, asi que
+    # programamos las dos variantes y el job `gate` deja pasar solo la que
+    # corresponde al desfase que tenga Madrid ese dia.
+    - cron: "0 7 * * *"    # 09:00 Madrid en verano   (CEST, UTC+2)
+    - cron: "0 8 * * *"    # 09:00 Madrid en invierno (CET,  UTC+1)
+    - cron: "30 20 * * *"  # 22:30 Madrid en verano
+    - cron: "30 21 * * *"  # 22:30 Madrid en invierno
   workflow_dispatch:
 
-# Solo un run a la vez. Si llega cron mientras ya corre, lo ignoramos.
-concurrency:
-  group: listmaker
-  cancel-in-progress: false
-
 jobs:
+  # Decide si este disparo es el de la estacion correcta. Va por el cron que lo
+  # lanzo (github.event.schedule), no por la hora actual: GitHub retrasa los
+  # programados varias horas y la hora de arranque no es fiable.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ -z "$SCHEDULE" ]; then
+            echo "Lanzado a mano: se ejecuta."
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          offset=$(TZ=Europe/Madrid date +%z)   # +0200 en verano, +0100 en invierno
+          case "$SCHEDULE" in
+            "0 7 * * *"|"30 20 * * *") want="+0200" ;;
+            "0 8 * * *"|"30 21 * * *") want="+0100" ;;
+            *) want="$offset" ;;
+          esac
+          if [ "$offset" = "$want" ]; then
+            echo "Cron '$SCHEDULE' corresponde a hoy (Madrid $offset): se ejecuta."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Cron '$SCHEDULE' es de la otra estacion (Madrid $offset): se salta."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   run:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 330  # ~5.5h, deja margen al límite de 6h del runner
+
+    # Solo un run a la vez (compartido con recover/audit/backfill/rename).
+    # Va a nivel de job y no de workflow: asi el disparo de la otra estacion,
+    # que se descarta en segundos en `gate`, nunca entra en la cola ni puede
+    # desplazar a un run lanzado a mano que este esperando.
+    concurrency:
+      group: listmaker
+      cancel-in-progress: false
 
     env:
       # OAuth user credentials (preferidas — necesario para crear archivos en Drive personal)
