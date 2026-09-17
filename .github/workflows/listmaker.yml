@@ -2,14 +2,22 @@ name: listmaker
 
 on:
   schedule:
-    # Dos pasadas al dia, a las 09:00 y a las 22:30 hora de Madrid.
-    # El cron de GitHub va en UTC y no conoce el horario de verano, asi que
-    # programamos las dos variantes y el job `gate` deja pasar solo la que
-    # corresponde al desfase que tenga Madrid ese dia.
-    - cron: "0 7 * * *"    # 09:00 Madrid en verano   (CEST, UTC+2)
-    - cron: "0 8 * * *"    # 09:00 Madrid en invierno (CET,  UTC+1)
-    - cron: "30 20 * * *"  # 22:30 Madrid en verano
-    - cron: "30 21 * * *"  # 22:30 Madrid en invierno
+    # Dos pasadas al dia pensadas para ARRANCAR hacia las 09:00 y las 22:30
+    # hora de Madrid.
+    #
+    # GitHub retrasa los programados, y no por igual segun la hora. Medido
+    # sobre el historial del repo (mediana, robusta frente a picos de 6h):
+    #   manana: 2h52m (n=96, p25-p75 2h11m-4h24m)
+    #   noche:  1h48m (n=14, p25-p75 1h40m-2h11m)
+    # Los crons van adelantados esa mediana para que el arranque real caiga
+    # cerca de la hora objetivo. Es una estimacion: habra dias antes y despues.
+    #
+    # El cron va en UTC y no conoce el horario de verano, asi que hay una
+    # variante por estacion y el job `gate` deja pasar solo la que toca.
+    - cron: "8 4 * * *"    # objetivo 09:00 Madrid, verano   (07:00 UTC - 2h52m)
+    - cron: "8 5 * * *"    # objetivo 09:00 Madrid, invierno (08:00 UTC - 2h52m)
+    - cron: "42 18 * * *"  # objetivo 22:30 Madrid, verano   (20:30 UTC - 1h48m)
+    - cron: "42 19 * * *"  # objetivo 22:30 Madrid, invierno (21:30 UTC - 1h48m)
   workflow_dispatch:
 
 jobs:
@@ -31,8 +39,8 @@ jobs:
           fi
           offset=$(TZ=Europe/Madrid date +%z)   # +0200 en verano, +0100 en invierno
           case "$SCHEDULE" in
-            "0 7 * * *"|"30 20 * * *") want="+0200" ;;
-            "0 8 * * *"|"30 21 * * *") want="+0100" ;;
+            "8 4 * * *"|"42 18 * * *") want="+0200" ;;
+            "8 5 * * *"|"42 19 * * *") want="+0100" ;;
             *) want="$offset" ;;
           esac
           if [ "$offset" = "$want" ]; then
