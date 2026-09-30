@@ -2,8 +2,13 @@ name: listmaker
 
 on:
   schedule:
-    # Dos pasadas al dia pensadas para ARRANCAR hacia las 09:00 y las 22:30
-    # hora de Madrid.
+    # RED DE SEGURIDAD. El disparo principal es externo: cron-job.org llama a
+    # la API (workflow_dispatch) a las 09:00 y 22:30 hora de Madrid, puntual.
+    # Estos crons de GitHub llegan con horas de retraso y solo se ejecutan si
+    # en las 8h anteriores NO hubo un run lanzado a mano/externo (ver `gate`).
+    #
+    # Horario original: dos pasadas al dia pensadas para ARRANCAR hacia las
+    # 09:00 y las 22:30 hora de Madrid.
     #
     # GitHub retrasa los programados, y no por igual segun la hora. Medido
     # sobre el historial del repo (mediana, robusta frente a picos de 6h):
@@ -26,15 +31,19 @@ jobs:
   # programados varias horas y la hora de arranque no es fiable.
   gate:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read   # para consultar los runs recientes de este workflow
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
       - id: check
         env:
           SCHEDULE: ${{ github.event.schedule }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           if [ -z "$SCHEDULE" ]; then
-            echo "Lanzado a mano: se ejecuta."
+            echo "Lanzado a mano o por el disparo externo: se ejecuta."
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           offset=$(TZ=Europe/Madrid date +%z)   # +0200 en verano, +0100 en invierno
@@ -43,12 +52,23 @@ jobs:
             "8 5 * * *"|"42 19 * * *") want="+0100" ;;
             *) want="$offset" ;;
           esac
-          if [ "$offset" = "$want" ]; then
-            echo "Cron '$SCHEDULE' corresponde a hoy (Madrid $offset): se ejecuta."
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
+          if [ "$offset" != "$want" ]; then
             echo "Cron '$SCHEDULE' es de la otra estacion (Madrid $offset): se salta."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # Respaldo del disparo externo: si en las ultimas 8h ya hubo un run
+          # lanzado por workflow_dispatch (en curso o terminado bien), este cron
+          # retrasado sobra. Los fallidos no cuentan: asi reintenta. Si la
+          # consulta falla, se ejecuta (mejor un run de mas que uno de menos).
+          since=$(date -u -d '8 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          recent=$(gh api -X GET "repos/$REPO/actions/workflows/listmaker.yml/runs"                      -f event=workflow_dispatch -f created=">=$since" -f per_page=20                      --jq '[.workflow_runs[] | select(.status != "completed" or .conclusion == "success")] | length'                    ) || recent=0
+          if [ "${recent:-0}" -gt 0 ]; then
+            echo "Cron '$SCHEDULE': ya hubo $recent run(s) externo(s)/manual(es) desde $since. Se salta."
             echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Cron '$SCHEDULE' (Madrid $offset): no hubo disparo externo en 8h, se ejecuta como respaldo."
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
   run:
