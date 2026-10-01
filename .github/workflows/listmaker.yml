@@ -136,6 +136,13 @@ jobs:
         if: steps.download.outcome == 'success'
         run: python scripts/upload.py
 
+      # lists/ultimas_entradas.txt: los 7 ultimos capitulos de cada autor por
+      # fecha, leidos de los nombres de los PDFs en Drive. No toca el foro.
+      - name: Latest entries per author
+        if: steps.download.outcome == 'success'
+        continue-on-error: true
+        run: python scripts/latest_entries.py
+
       # Si scrape o write fallaron, marca el job como failed (después del upload, para
       # que GH Actions mande el email automático al owner del repo).
       - name: Mark job failed if any stage failed
