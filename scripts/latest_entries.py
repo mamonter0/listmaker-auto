@@ -46,7 +46,9 @@ def parse_pdf_name(title):
 
 
 def list_all(drive, q):
-    return drive.ListFile({"q": f"{q} and trashed=false", "maxResults": 1000, "fields": FIELDS}).GetList()
+    # Sin maxResults: si se pasa, PyDrive2 GetList() devuelve SOLO la primera
+    # página. Sin él usa páginas de 1000 y las recorre todas.
+    return drive.ListFile({"q": f"{q} and trashed=false", "fields": FIELDS}).GetList()
 
 
 def main():
