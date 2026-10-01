@@ -1,0 +1,51 @@
+name: latest-entries
+
+# Regenera solo lists/ultimas_entradas.txt a partir de lo que hay en Drive.
+# NO toca el foro: sirve para probar o refrescar el listado sin lanzar un
+# scrapeo completo. El pipeline principal ya lo regenera en cada run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      per_author:
+        description: "Capitulos por autor"
+        type: string
+        default: "7"
+
+# Mismo grupo que el pipeline: escriben los mismos ficheros de lists/.
+concurrency:
+  group: listmaker
+  cancel-in-progress: false
+
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+      GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+      GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+      ARTISTS_FOLDER_ID: ${{ secrets.ARTISTS_FOLDER_ID }}
+      # config.py aborta si no esta definida, aunque aqui no se navegue el foro
+      FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
+      PRIVATE_LOG: "1"   # detalle a Drive, no al log publico (ver listmaker.yml)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Latest entries per author
+        run: python scripts/latest_entries.py --per-author "${{ inputs.per_author }}"
+
+      - name: Save private log to Drive
+        if: always()
+        continue-on-error: true
+        run: python scripts/save_log.py
