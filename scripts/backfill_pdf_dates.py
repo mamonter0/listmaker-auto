@@ -41,6 +41,7 @@ from src.config import (
     parse_artists_file,
 )
 from src.drive_auth import get_drive
+from src.runlog import public
 from src.writer import Writer
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -300,13 +301,13 @@ def main():
     finally:
         w.close()
 
-    print("\n" + "=" * 55)
-    print(f"{'Renombrados' if args.apply else 'Renombrables'} : {stats['renamed']}")
-    print(f"Hilo no localizado    : {stats['no_thread']}")
-    print(f"Capitulo no localizado: {stats['no_match']}")
-    print(f"Sin fecha en el indice: {stats['no_date']}")
-    print(f"Errores               : {stats['errors']}")
-    print("=" * 55)
+    public("\n" + "=" * 55)
+    public(f"{'Renombrados' if args.apply else 'Renombrables'} : {stats['renamed']}")
+    public(f"Hilo no localizado    : {stats['no_thread']}")
+    public(f"Capitulo no localizado: {stats['no_match']}")
+    public(f"Sin fecha en el indice: {stats['no_date']}")
+    public(f"Errores               : {stats['errors']}")
+    public("=" * 55)
 
 
 if __name__ == "__main__":

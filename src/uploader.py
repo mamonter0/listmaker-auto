@@ -6,14 +6,19 @@ from .config import (
     LISTS_FOLDER,
     LOCAL_FOLDER,
     PARENT_DRIVE_ID,
+    RUN_LOG_NAME,
 )
 from .drive_auth import get_drive
+from .runlog import public
 
 
 class GDriveUploader:
     def __init__(self, drive=None):
         print("Inicializando Uploader a Google Drive...")
         self.drive = drive or get_drive()
+        self.pdfs = 0
+        self.state_files = 0
+        self.errors = 0
 
     @staticmethod
     def escape_query_string(text):
@@ -86,8 +91,10 @@ class GDriveUploader:
                     })
                     gfile.SetContentFile(local_item_path)
                     gfile.Upload()
+                    self.pdfs += 1
                 except Exception as e:
                     print(f"      Error subiendo archivo: {e}")
+                    self.errors += 1
 
     def _resolve_main_folder(self):
         if ARTISTS_FOLDER_ID:
@@ -121,6 +128,8 @@ class GDriveUploader:
 
             for item_name in os.listdir(LISTS_FOLDER):
                 file_path = os.path.join(LISTS_FOLDER, item_name)
+                if item_name == RUN_LOG_NAME:
+                    continue  # lo gestiona save_log.py
                 if os.path.isfile(file_path):
                     try:
                         if item_name in drive_lists_items:
@@ -134,9 +143,14 @@ class GDriveUploader:
                             })
                         gfile.SetContentFile(file_path)
                         gfile.Upload()
+                        self.state_files += 1
                     except Exception as e:
                         print(f"   Error subiendo {item_name}: {e}")
+                        self.errors += 1
         else:
-            print(f"\nNo se encontró la carpeta local '{LISTS_FOLDER}'. Se omitirá su respaldo.")
+            public(f"\nNo se encontró la carpeta local '{LISTS_FOLDER}'. Se omitirá su respaldo.")
 
-        print("\nSincronización completa.")
+        public(
+            f"Subido a Drive: {self.pdfs} PDFs, {self.state_files} ficheros de estado, "
+            f"{self.errors} errores."
+        )

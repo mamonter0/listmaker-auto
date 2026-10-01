@@ -1,7 +1,8 @@
 name: audit-missing-chapters
 
 # Cruza el indice de threadmarks del foro contra los PDFs que hay en Drive
-# y reporta los huecos. Solo lectura: no descarga ni modifica nada.
+# y reporta los huecos. No descarga capitulos: solo deja el informe
+# (lists/missing_chapters.json) en Drive.
 
 on:
   workflow_dispatch:
@@ -33,8 +34,21 @@ jobs:
       FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
       FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
       ARTISTS_TXT_B64: ${{ secrets.ARTISTS_TXT_B64 }}
+      PRIVATE_LOG: "1"   # detalle a Drive, no al log publico (ver listmaker.yml)
 
     steps:
+      # Un input interpolado con ${{ }} sale en claro en el log publico. Lo
+      # leemos del evento, lo enmascaramos y lo pasamos por GITHUB_ENV.
+      - name: Read inputs (masked)
+        run: |
+          ARTIST=$(jq -r '.inputs.artist // ""' "$GITHUB_EVENT_PATH")
+          if [ -n "$ARTIST" ]; then
+            echo "::add-mask::$ARTIST"
+            IFS=',' read -ra parts <<< "$ARTIST"
+            for p in "${parts[@]}"; do p="${p// /}"; [ -n "$p" ] && echo "::add-mask::$p"; done
+          fi
+          echo "AUDIT_ARTIST=$ARTIST" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -49,19 +63,22 @@ jobs:
         run: google-chrome --version
 
       - name: Download state from Drive
+        id: download
         run: python scripts/download.py
 
       - name: Audit
         run: |
           python scripts/audit_missing_chapters.py \
-            --limit ${{ inputs.limit }} \
-            ${{ inputs.artist && format('--artist "{0}"', inputs.artist) || '' }}
+            --limit "${{ inputs.limit }}" \
+            ${AUDIT_ARTIST:+--artist "$AUDIT_ARTIST"}
 
-      - name: Upload report
+      # El informe va a Drive (lists/missing_chapters.json), no a un artifact:
+      # en un repo publico cualquiera puede descargar los artifacts.
+      - name: Upload report to Drive
+        if: always() && steps.download.outcome == 'success'
+        run: python scripts/upload.py
+
+      - name: Save private log to Drive
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: missing-chapters
-          path: lists/missing_chapters.json
-          if-no-files-found: warn
-          retention-days: 30
+        continue-on-error: true
+        run: python scripts/save_log.py

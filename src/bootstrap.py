@@ -15,6 +15,7 @@ import base64
 import os
 
 from .config import ARTISTS_FILE, COOKIES_FILE, LIST_DIR
+from .runlog import public
 
 
 def _materialize(env_var: str, dest_path: str, label: str, overwrite: bool = True) -> bool:
@@ -46,5 +47,7 @@ def _materialize(env_var: str, dest_path: str, label: str, overwrite: bool = Tru
 def bootstrap_state():
     """Materializa cookies y artists.txt desde secrets (el secret manda sobre Drive)."""
     os.makedirs(LIST_DIR, exist_ok=True)
-    _materialize("FORUM_COOKIES_B64", COOKIES_FILE, "Cookies")
-    _materialize("ARTISTS_TXT_B64", ARTISTS_FILE, "artists.txt")
+    cookies = _materialize("FORUM_COOKIES_B64", COOKIES_FILE, "Cookies")
+    artists = _materialize("ARTISTS_TXT_B64", ARTISTS_FILE, "artists.txt")
+    src = lambda ok: "secret" if ok else "Drive"  # noqa: E731
+    public(f"Estado: cookies desde {src(cookies)}, artists.txt desde {src(artists)}.")

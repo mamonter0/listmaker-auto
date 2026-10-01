@@ -5,7 +5,7 @@ la cola, guarda el avance en Drive y se para.
 
 Estado en `lists/recovery_queue.json` (lo sincronizan download.py / upload.py):
     {
-      "artists":       ["fakeking", ...],   # filtros con los que se construyo
+      "artists":       ["<slug>", ...],     # filtros con los que se construyo
       "built_at":      "2026-08-30 12:00:00",
       "pending":       [ {artist, thread, chapter, url, category, attempts}, ... ],
       "failed":        [ ... ],             # dados por perdidos tras MAX_ATTEMPTS
@@ -23,7 +23,7 @@ cero se marca `completed_at`, y a partir de ahi cada ejecucion sale al instante
 (el workflow ademas desactiva su propio cron).
 
 USO:
-    python scripts/recover_missing.py --artists "fakeking,infonticus" --batch 200
+    python scripts/recover_missing.py --artists "<slug1>,<slug2>" --batch 200
     python scripts/recover_missing.py --batch 200          # sigue la cola existente
     python scripts/recover_missing.py --rebuild --artists "..."   # empieza de cero
 """
@@ -48,6 +48,7 @@ from src.config import (
     LOCAL_FOLDER,
     parse_artists_file,
 )
+from src.runlog import public, redact
 from src.writer import Writer
 
 QUEUE_FILE = os.path.join(LIST_DIR, "recovery_queue.json")
@@ -120,14 +121,16 @@ def build_queue(w, drive, artist_filters):
     entries = parse_artists_file(ARTISTS_FILE)
     wanted = [a.strip().lower() for a in artist_filters if a.strip()]
     if not wanted:
-        sys.exit("build_queue necesita al menos un filtro de artista.")
+        public("build_queue necesita al menos un filtro de artista.")
+        sys.exit(1)
     entries = [e for e in entries if any(a in e[0].lower() for a in wanted)]
     if not entries:
-        sys.exit(f"Ningun perfil casa con {wanted}")
-    print(f"Auditando {len(entries)} autores...\n")
+        public(f"Ningun perfil casa con el filtro ({len(wanted)} valores).")
+        sys.exit(1)
+    public(f"Auditando {len(entries)} autores...")
 
-    # El nombre visible del autor ("Fakeking") es el que da nombre a la carpeta.
-    # El slug de la URL ("fakeking") NO sirve: difiere en mayusculas y no casaria.
+    # El nombre visible del autor ("Autor") es el que da nombre a la carpeta.
+    # El slug de la URL ("autor") NO sirve: difiere en mayusculas y no casaria.
     artists_index = {}
     if os.path.exists(ARTISTS_INDEX_FILE):
         with open(ARTISTS_INDEX_FILE, "r", encoding="utf-8") as fh:
@@ -172,6 +175,7 @@ def build_queue(w, drive, artist_filters):
             if gaps:
                 print(f"     {th_title}: faltan {len(gaps)} de {len(chapters)}")
                 pending.extend(gaps)
+        public(f"Autor {i}/{len(entries)}: {len(threads)} hilos; faltan {len(pending)} acumulados")
 
     return {
         "artists": wanted,
@@ -240,7 +244,7 @@ def main():
 
     # Terminada y verificada: salir antes de arrancar Chrome o tocar el foro.
     if queue is not None and queue.get("completed_at"):
-        print(f"Recuperacion terminada y verificada el {queue['completed_at']}. Nada que hacer.")
+        public(f"Recuperacion terminada y verificada el {queue['completed_at']}. Nada que hacer.")
         set_output("completed", "true")
         return
 
@@ -248,23 +252,25 @@ def main():
     w = Writer()
     try:
         if not w.load_cookies():
-            sys.exit("No se pudieron cargar las cookies.")
+            public("No se pudieron cargar las cookies.")
+            sys.exit(1)
 
         if queue is None:
             from src.drive_auth import get_drive
             filters = args.artists.split(",") if args.artists else []
             if not filters:
-                sys.exit("No hay cola y no se paso --artists para construirla.")
+                public("No hay cola y no se paso --artists para construirla.")
+                sys.exit(1)
             queue = build_queue(w, get_drive(), filters)
             save_queue(queue)
-            print(f"\nCola construida: {len(queue['pending'])} capitulos pendientes.")
+            public(f"\nCola construida: {len(queue['pending'])} capitulos pendientes.")
 
         pending = queue.get("pending", [])
 
         if not pending:
             # La cola dice que esta todo, pero solo sabe lo que ella misma tacho.
             # Ahora los PDFs de la tanda anterior ya estan subidos: comprobamos Drive.
-            print("Cola vacia. Verificando contra Drive que no falta nada...")
+            public("Cola vacia. Verificando contra Drive que no falta nada...")
             still = verify(w, queue)
             queue["verifications"] = queue.get("verifications", 0) + 1
 
@@ -272,7 +278,7 @@ def main():
                 queue["completed_at"] = now()
                 save_queue(queue)
                 set_output("completed", "true")
-                print(f"Verificado: todo esta en Drive "
+                public(f"Verificado: todo esta en Drive "
                       f"({len(queue.get('failed', []))} dados por perdidos). Terminado.")
                 return
 
@@ -285,16 +291,16 @@ def main():
                 queue["completed_at"] = now()
                 save_queue(queue)
                 set_output("completed", "true")
-                print(f"{len(still)} siguen sin aparecer tras {MAX_VERIFICATIONS} "
+                public(f"{len(still)} siguen sin aparecer tras {MAX_VERIFICATIONS} "
                       f"verificaciones; pasan a 'failed'. Terminado.")
                 return
 
-            print(f"La verificacion encontro {len(still)} que siguen faltando; se reencolan.")
+            public(f"La verificacion encontro {len(still)} que siguen faltando; se reencolan.")
             queue["pending"] = pending = still
             save_queue(queue)
 
         batch = pending[: args.batch]
-        print(f"\nPendientes: {len(pending)} | esta tanda: {len(batch)}\n")
+        public(f"\nPendientes: {len(pending)} | esta tanda: {len(batch)}\n")
 
         try:
             for n, item in enumerate(batch, 1):
@@ -308,7 +314,7 @@ def main():
                         lost += register_failure(queue, pending, item)
                 except RuntimeError as e:
                     # Rate limit persistente: paramos la tanda sin castigar al capitulo.
-                    print(f"   Abortando tanda: {e}")
+                    public(f"   Abortando tanda en {n}/{len(batch)}: {redact(e)}")
                     break
                 except WebDriverException as e:
                     print(f"   Error de driver: {type(e).__name__}")
@@ -323,15 +329,15 @@ def main():
     finally:
         w.close()
 
-    print("\n" + "=" * 55)
-    print(f"Descargados en esta tanda : {ok}")
-    print(f"Fallidos (se reintentan)  : {fail - lost}")
-    print(f"Dados por perdidos        : {lost} (total {len(queue.get('failed', []))})")
-    print(f"Quedan pendientes         : {len(queue.get('pending', []))}")
-    print(f"Acumulado total           : {queue.get('done', 0)}")
+    public("\n" + "=" * 55)
+    public(f"Descargados en esta tanda : {ok}")
+    public(f"Fallidos (se reintentan)  : {fail - lost}")
+    public(f"Dados por perdidos        : {lost} (total {len(queue.get('failed', []))})")
+    public(f"Quedan pendientes         : {len(queue.get('pending', []))}")
+    public(f"Acumulado total           : {queue.get('done', 0)}")
     if not queue.get("pending"):
-        print("Cola vacia: la proxima ejecucion verificara contra Drive.")
-    print("=" * 55)
+        public("Cola vacia: la proxima ejecucion verificara contra Drive.")
+    public("=" * 55)
 
 
 if __name__ == "__main__":

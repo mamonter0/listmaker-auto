@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.bootstrap import bootstrap_state
+from src.runlog import public, redact
 from src.scraper import ListMaker
 
 
@@ -24,7 +25,7 @@ def main():
     except RuntimeError as e:
         # RuntimeError = abort intencionado: rate limit persistente,
         # tasa de fallos >50%, etc. Guardamos lo que tengamos y salimos != 0.
-        print(f"\nAbortado: {e}")
+        public(f"\nAbortado: {redact(e, 300)}")
         bot.save_and_compare_history()
         exit_code = 3
     finally:

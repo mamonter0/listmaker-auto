@@ -38,6 +38,7 @@ jobs:
       FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
       FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
       ARTISTS_TXT_B64: ${{ secrets.ARTISTS_TXT_B64 }}
+      PRIVATE_LOG: "1"   # detalle a Drive, no al log publico (ver listmaker.yml)
 
     steps:
       - uses: actions/checkout@v4
@@ -63,3 +64,8 @@ jobs:
             ${{ inputs.apply && '--apply' || '' }} \
             ${{ inputs.visit_missing && '--visit-missing' || '' }} \
             --limit ${{ inputs.limit }}
+
+      - name: Save private log to Drive
+        if: always()
+        continue-on-error: true
+        run: python scripts/save_log.py
