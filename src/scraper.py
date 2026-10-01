@@ -4,6 +4,7 @@ import pickle
 import re
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from selenium import webdriver
 from selenium.common.exceptions import (
@@ -687,7 +688,8 @@ class ListMaker:
                 return
 
         deltas = []
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # El runner de GitHub va en UTC; el informe se lee en hora de Madrid.
+        timestamp = datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y-%m-%d %H:%M:%S")
         deltas.append(f"Reporte de Cambios - {timestamp}")
 
         structured = {
