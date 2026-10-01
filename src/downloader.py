@@ -6,14 +6,18 @@ from .config import (
     LISTS_FOLDER,
     LOCAL_FOLDER,
     PARENT_DRIVE_ID,
+    RUN_LOG_NAME,
 )
 from .drive_auth import get_drive
+from .runlog import public
 
 
 class GDriveDownloader:
     def __init__(self, drive=None):
         print("Inicializando Downloader desde Google Drive...")
         self.drive = drive or get_drive()
+        self.downloaded = 0
+        self.errors = 0
 
     def find_folder_in_drive(self, folder_name, parent_id="root"):
         safe_name = folder_name.replace("'", "\\'")
@@ -41,11 +45,14 @@ class GDriveDownloader:
             ).GetList()
         except Exception as e:
             print(f"   Error listando contenidos de Drive: {e}")
+            self.errors += 1
             return
 
         for item in file_list:
             item_name = item["title"]
             item_path = os.path.join(local_path, item_name)
+            if item_name == RUN_LOG_NAME:
+                continue  # lo gestiona save_log.py
 
             if item["mimeType"] == "application/vnd.google-apps.folder":
                 if item_name in skip_folder_names:
@@ -60,8 +67,10 @@ class GDriveDownloader:
                         print(f"   Descargando nuevo: {item_name}")
                     try:
                         item.GetContentFile(item_path)
+                        self.downloaded += 1
                     except Exception as e:
                         print(f"      Error descargando archivo: {e}")
+                        self.errors += 1
 
     def run(self):
         """Sincroniza solo `lists/` desde Drive — el estado runtime que cada
@@ -80,7 +89,7 @@ class GDriveDownloader:
         else:
             main_drive_folder_id = self.find_folder_in_drive(DRIVE_TARGET_FOLDER, PARENT_DRIVE_ID)
         if not main_drive_folder_id:
-            print(f"Error: No se encontró la carpeta '{DRIVE_TARGET_FOLDER}' en Google Drive.")
+            public(f"Error: No se encontró la carpeta '{DRIVE_TARGET_FOLDER}' en Google Drive.")
             return
 
         lists_drive_folder_id = self.find_folder_in_drive(LISTS_FOLDER, main_drive_folder_id)
@@ -88,6 +97,6 @@ class GDriveDownloader:
             print(f"\nRestaurando archivos de configuración e histórico en '{LISTS_FOLDER}'...")
             self.download_recursive(lists_drive_folder_id, LISTS_FOLDER, force_overwrite=True)
         else:
-            print(f"\nNo se encontró la carpeta '{LISTS_FOLDER}' respaldada en Drive.")
+            public(f"\nNo se encontró la carpeta '{LISTS_FOLDER}' respaldada en Drive.")
 
-        print("\nRecuperación completada.")
+        public(f"Estado descargado de Drive: {self.downloaded} ficheros, {self.errors} errores.")

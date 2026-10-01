@@ -32,6 +32,7 @@ jobs:
       ARTISTS_FOLDER_ID: ${{ secrets.ARTISTS_FOLDER_ID }}
       # config.py aborta si no esta definida, aunque este script no navegue el foro
       FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
+      PRIVATE_LOG: "1"   # detalle a Drive, no al log publico (ver listmaker.yml)
 
     steps:
       - uses: actions/checkout@v4
@@ -51,3 +52,8 @@ jobs:
       - name: Apply (renombrar de verdad)
         if: ${{ inputs.apply }}
         run: python scripts/rename_pdfs_datefirst.py --apply
+
+      - name: Save private log to Drive
+        if: always()
+        continue-on-error: true
+        run: python scripts/save_log.py

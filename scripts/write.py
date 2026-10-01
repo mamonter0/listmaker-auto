@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.bootstrap import bootstrap_state
+from src.runlog import public, redact
 from src.writer import Writer
 
 
@@ -18,7 +19,7 @@ def main():
         print("\nDetenido.")
         exit_code = 130
     except RuntimeError as e:
-        print(f"\nAbortado por rate limit: {e}")
+        public(f"\nAbortado por rate limit: {redact(e)}")
         exit_code = 3
     finally:
         bot.close()

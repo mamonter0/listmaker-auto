@@ -31,6 +31,7 @@ from .config import (
     WRITER_RATE_LIMIT_BACKOFF,
     parse_artists_file,
 )
+from .runlog import public
 
 
 class Writer:
@@ -39,6 +40,8 @@ class Writer:
         self.driver = None
         self.wait = None
         self._rl_attempts = 0
+        self.saved = 0    # PDFs generados en este run (para la consola pública)
+        self.failed = 0
         self._build_driver()
 
     def _build_driver(self):
@@ -78,10 +81,9 @@ class Writer:
             # Una pagina con estructura de contenido del foro (post, indice de
             # threadmarks, resultados de busqueda, perfil) se ha cargado bien:
             # NO es un bloqueo, diga lo que diga su texto. El texto de un
-            # capitulo puede contener "slow down" o "rate limit" — Chapter 49 de
-            # "Collecting Waifus throughout the Multiverse" (Sramon) tumbo dos
-            # runs seguidos con 52 min de espera cada uno por eso. Las paginas
-            # de bloqueo reales (nginx, Cloudflare) no traen esta estructura.
+            # capitulo puede contener "slow down" o "rate limit" — un capitulo
+            # asi tumbo dos runs seguidos con 52 min de espera cada uno. Las
+            # paginas de bloqueo reales (nginx, Cloudflare) no traen esta estructura.
             if self.driver.find_elements(
                 By.CSS_SELECTOR,
                 ".bbWrapper, article.message, .structItem, .contentRow, .memberHeader",
@@ -106,10 +108,10 @@ class Writer:
     def _handle_rate_limit(self):
         self._rl_attempts += 1
         if self._rl_attempts > len(WRITER_RATE_LIMIT_BACKOFF):
-            print("   Rate limit persistente — abortando.")
+            public("   Rate limit persistente — abortando.")
             raise RuntimeError("Rate limit persistente")
         wait = WRITER_RATE_LIMIT_BACKOFF[self._rl_attempts - 1]
-        print(f"   Posible rate limit — esperando {wait}s (intento {self._rl_attempts}).")
+        public(f"   Posible rate limit — esperando {wait}s (intento {self._rl_attempts}).")
         time.sleep(wait)
 
     def _reset_backoff(self):
@@ -253,7 +255,7 @@ class Writer:
                 json.dump(clean, f, indent=2, ensure_ascii=False)
             if clean:
                 count = sum(len(c) for t in clean.values() for c in t.values())
-                print(f"{count} capítulos pendientes guardados en {PENDING_CHAPTERS_FILE}")
+                public(f"{count} capítulos pendientes guardados en {PENDING_CHAPTERS_FILE}")
             else:
                 print("Sin capítulos pendientes (todos los intentos exitosos).")
         except Exception as e:
@@ -709,14 +711,18 @@ class Writer:
                 with open(save_path, "wb") as f:
                     f.write(base64.b64decode(result["data"]))
                 print(f"      PDF Guardado: {os.path.basename(save_path)}")
+                self.saved += 1
             else:
                 print("      No se pudo aislar el post.")
+                self.failed += 1
 
         except Exception as e:
             print(f"      Error generando PDF: {e}")
+            self.failed += 1
 
     def run(self):
         if not self.load_cookies():
+            public("Writer: no se pudieron cargar las cookies.")
             return
 
         # Estrategia de queue:
@@ -737,12 +743,14 @@ class Writer:
 
         if not queue:
             self._save_pending({})  # asegura archivo limpio
-            print("Nada nuevo que descargar.")
+            public("Nada nuevo que descargar.")
             return
 
+        n_threads = sum(len(t) for t in queue.values())
+        public(f"En cola: {len(queue)} autores, {n_threads} hilos.")
         if pending_prev:
             cnt = sum(len(c) for t in pending_prev.values() for c in t.values())
-            print(f"Reintentando {cnt} capítulos pendientes de runs anteriores.")
+            public(f"Reintentando {cnt} capítulos pendientes de runs anteriores.")
 
         # `pending` es la copia mutable: empieza igual que la queue, se reduce
         # al ir descargando con éxito, y al final se persiste con lo que quede.
@@ -754,26 +762,31 @@ class Writer:
         artists_index = self.load_artists_index()
 
         try:
-            for artist_name, threads_data in queue.items():
-                print(f"\nProcesando: {artist_name}")
+            for pos, (artist_name, threads_data) in enumerate(queue.items(), 1):
+                tag = f"Autor {pos}/{len(queue)}"
+                saved_before, failed_before = self.saved, self.failed
+                print(f"\n[{tag}] Procesando: {artist_name}")
 
                 if not self._driver_alive():
                     if not self._recover_driver():
-                        print("   No pude recuperar el driver — abortando.")
+                        public("   No pude recuperar el driver — abortando.")
                         return
 
                 my_url = self.resolve_artist_url(artist_name, artists_index, artist_urls_list)
 
                 if not my_url:
                     print(f"   No encontré la URL perfil para {artist_name}")
+                    public(f"{tag}: sin URL de perfil (queda pendiente)")
                     # Lo dejamos en pending por si más adelante el índice se actualiza.
                     continue
 
                 known_threads = self.find_thread_urls_for_artist(my_url)
+                threads_missing = 0
 
                 for thread_title, chapters in threads_data.items():
                     if thread_title not in known_threads:
                         print(f"   Hilo no encontrado en perfil: '{thread_title}'")
+                        threads_missing += 1
                         continue
 
                     thread_base_url = known_threads[thread_title]
@@ -858,8 +871,16 @@ class Writer:
                             raise
                         except Exception as e:
                             print(f"      Error al descargar capítulo: {e}")
+                            self.failed += 1
                             # No marcamos done — queda en pending.
+
+                public(
+                    f"{tag}: {self.saved - saved_before} PDFs, "
+                    f"{self.failed - failed_before} fallidos"
+                    + (f", {threads_missing} hilos no encontrados" if threads_missing else "")
+                )
         finally:
+            public(f"Writer: {self.saved} PDFs generados, {self.failed} fallidos.")
             self._save_pending(pending)
 
     def close(self):

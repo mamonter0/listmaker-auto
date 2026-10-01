@@ -34,6 +34,7 @@ from .config import (
     SEEN_REMOVALS_FILE,
     parse_artists_file,
 )
+from .runlog import public, redact
 
 
 class ListMaker:
@@ -48,6 +49,7 @@ class ListMaker:
         self.author_url_map = {}
         self.read_only_urls = set()      # URLs marcadas read_only en artists.txt
         self.read_only_authors = set()   # nombres de autor resueltos como read_only
+        self._pos = ""                   # "12/44": autor en curso, para la consola pública
 
     def _build_driver(self):
         options = Options()
@@ -85,10 +87,9 @@ class ListMaker:
             # Una pagina con estructura de contenido del foro (post, indice de
             # threadmarks, resultados de busqueda, perfil) se ha cargado bien:
             # NO es un bloqueo, diga lo que diga su texto. El texto de un
-            # capitulo puede contener "slow down" o "rate limit" — Chapter 49 de
-            # "Collecting Waifus throughout the Multiverse" (Sramon) tumbo dos
-            # runs seguidos con 52 min de espera cada uno por eso. Las paginas
-            # de bloqueo reales (nginx, Cloudflare) no traen esta estructura.
+            # capitulo puede contener "slow down" o "rate limit" — un capitulo
+            # asi tumbo dos runs seguidos con 52 min de espera cada uno. Las
+            # paginas de bloqueo reales (nginx, Cloudflare) no traen esta estructura.
             if self.driver.find_elements(
                 By.CSS_SELECTOR,
                 ".bbWrapper, article.message, .structItem, .contentRow, .memberHeader",
@@ -116,10 +117,10 @@ class ListMaker:
     def _handle_rate_limit(self):
         self._rl_attempts += 1
         if self._rl_attempts > len(RATE_LIMIT_BACKOFF):
-            print("   Rate limit persistente — abortando.")
+            public("   Rate limit persistente — abortando.")
             raise RuntimeError("Rate limit persistente")
         wait = RATE_LIMIT_BACKOFF[self._rl_attempts - 1]
-        print(f"   Posible rate limit — esperando {wait}s (intento {self._rl_attempts}).")
+        public(f"   Posible rate limit — esperando {wait}s (intento {self._rl_attempts}).")
         time.sleep(wait)
 
     def _reset_backoff(self):
@@ -141,7 +142,7 @@ class ListMaker:
 
     def load_cookies(self):
         if not os.path.exists(COOKIES_FILE):
-            print(f"Error: No se encuentra {COOKIES_FILE}")
+            public(f"Error: No se encuentra {COOKIES_FILE}")
             return False
         print("Cargando cookies...")
         self.driver.get(BASE_URL)
@@ -157,20 +158,23 @@ class ListMaker:
             time.sleep(2)
         except Exception as e:
             print(f"Error cookies: {e}")
+            public(f"Error cargando cookies: {type(e).__name__}")
             return False
 
         # Comprobar a donde nos ha llevado la sesion. Con cookies caducadas el
         # foro no muestra error: redirige a la verificacion en dos pasos o al
         # login, y cada perfil acaba en timeout (43 x 15s sin decir por que).
+        # A la consola publica solo va el tipo de pagina, nunca su titulo.
         kind, desc = self._describe_page()
+        print(f"Pagina tras cargar cookies: [{kind}] {desc}")
         if kind in ("two_step", "login"):
-            print(f"COOKIES CADUCADAS: el foro pide volver a iniciar sesion ({desc}).")
-            print("Regenera las cookies con cookiesExtractor y actualiza FORUM_COOKIES_B64.")
+            public(f"COOKIES CADUCADAS: el foro pide volver a iniciar sesion ({kind}).")
+            public("Regenera las cookies con cookiesExtractor y actualiza FORUM_COOKIES_B64.")
             return False
         if kind == "challenge":
-            print(f"BLOQUEO: el foro devuelve una pagina de desafio anti-bot ({desc}).")
+            public("BLOQUEO: el foro devuelve una pagina de desafio anti-bot.")
             return False
-        print(f"Cookies cargadas. Sesion: {desc}")
+        public(f"Cookies cargadas (pagina: {kind}).")
         return True
 
     def _describe_page(self):
@@ -398,6 +402,7 @@ class ListMaker:
         if author_name:
             entry["author"] = author_name
         self.failed_artists.append(entry)
+        public(f"Autor {self._pos}: FALLO {reason}")
 
     def process_artists(self):
         if not os.path.exists(ARTISTS_FILE):
@@ -411,10 +416,12 @@ class ListMaker:
         self.read_only_urls = {url for url, ro in entries if ro}
 
         ro_count = len(self.read_only_urls)
-        print(f"Procesando {len(urls)} artistas ({ro_count} read_only)...")
+        public(f"Procesando {len(urls)} artistas ({ro_count} read_only)...")
 
-        for url in urls:
+        for pos, url in enumerate(urls, 1):
+            self._pos = f"{pos}/{len(urls)}"
             print("=" * 60)
+            print(f"[{self._pos}] {url}")
 
             if not self._driver_alive():
                 self._recover_driver()
@@ -525,14 +532,18 @@ class ListMaker:
 
                     count += 1
 
+                if threads_dict:
+                    n_caps = sum(len(c) for c in self.scraped_data[author_name].values())
+                    public(f"Autor {self._pos}: {len(threads_dict)} hilos, {n_caps} capitulos")
+
             except KeyboardInterrupt:
                 raise
             except RuntimeError as e:
-                print(f"\nAbortando run: {e}")
+                public(f"\nAbortando run: {redact(e)}")
                 raise
             except Exception as e:
                 print(f"   Error autor ({author_name or url}): {type(e).__name__}: {e}")
-                self._register_failure(url, "unexpected_error", e, author_name=author_name)
+                self._register_failure(url, f"unexpected_error:{type(e).__name__}", e, author_name=author_name)
                 if not self._driver_alive():
                     self._recover_driver()
 
@@ -816,6 +827,18 @@ class ListMaker:
                     structured["chapters_removed"].setdefault(artist, {})[thread_title] = list(new_chapter_removals)
 
         self._save_seen_removals(seen)
+
+        def _caps(section):
+            return sum(len(c) for th in structured[section].values() for c in th.values())
+
+        public(
+            f"Resumen: {len(self.scraped_data)} autores leidos, {len(self.failed_artists)} con fallos | "
+            f"nuevos: {len(structured['artists_added'])} autores, "
+            f"{sum(len(t) for t in structured['threads_added'].values())} hilos, "
+            f"{_caps('chapters_added')} capitulos | "
+            f"eliminados: {sum(len(t) for t in structured['threads_removed'].values())} hilos, "
+            f"{_caps('chapters_removed')} capitulos"
+        )
 
         with open(DELTA_FILE, "a", encoding="utf-8") as f:
             f.write("\n" + "=" * 60 + "\n")

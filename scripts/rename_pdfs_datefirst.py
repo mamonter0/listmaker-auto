@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import ARTISTS_FOLDER_ID, DRIVE_TARGET_FOLDER, LISTS_FOLDER, PARENT_DRIVE_ID
 from src.drive_auth import get_drive
+from src.runlog import public
 
 # Titulo_YYYY-MM-DD[_HH-MM].pdf  ->  captura titulo y fecha
 OLD_RE = re.compile(r"^(?P<name>.+)_(?P<date>\d{4}-\d{2}-\d{2}(?:_\d{2}-\d{2})?)$")
@@ -97,7 +98,7 @@ def main():
     args = ap.parse_args()
 
     if not args.apply:
-        print("=== DRY-RUN: no se modifica nada. Usa --apply para ejecutar. ===\n")
+        public("=== DRY-RUN: no se modifica nada. Usa --apply para ejecutar. ===\n")
 
     drive = get_drive()
     root = find_root(drive)
@@ -105,17 +106,17 @@ def main():
 
     walk(drive, root, DRIVE_TARGET_FOLDER, stats, args.apply)
 
-    print("\n" + "=" * 55)
-    print(f"PDFs encontrados      : {stats['pdfs']}")
-    print(f"Ya en formato nuevo   : {stats['already']}")
-    print(f"Sin fecha (intactos)  : {stats['no_date']}")
-    print(f"A renombrar           : {stats['to_rename']}")
+    public("\n" + "=" * 55)
+    public(f"PDFs encontrados      : {stats['pdfs']}")
+    public(f"Ya en formato nuevo   : {stats['already']}")
+    public(f"Sin fecha (intactos)  : {stats['no_date']}")
+    public(f"A renombrar           : {stats['to_rename']}")
     if args.apply:
-        print(f"Renombrados           : {stats['renamed']}")
-    print(f"Errores               : {stats['errors']}")
-    print("=" * 55)
+        public(f"Renombrados           : {stats['renamed']}")
+    public(f"Errores               : {stats['errors']}")
+    public("=" * 55)
     if not args.apply and stats["to_rename"]:
-        print("\nRevisa la lista y relanza con --apply si te cuadra.")
+        public("\nRevisa la lista y relanza con --apply si te cuadra.")
 
 
 if __name__ == "__main__":

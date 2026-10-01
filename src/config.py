@@ -27,6 +27,9 @@ LOCAL_FOLDER = "Artists"
 DRIVE_TARGET_FOLDER = "Artists"
 PARENT_DRIVE_ID = "root"
 LISTS_FOLDER = "lists"
+# Log privado de los runs (en Drive, lists/run_log.txt). Lo gestiona solo
+# scripts/save_log.py: download/upload lo ignoran.
+RUN_LOG_NAME = "run_log.txt"
 
 # ID directo de la carpeta `Artists` en Drive. Imprescindible cuando se usa
 # Service Account, porque el SA no ve la carpeta bajo su 'root' (está en

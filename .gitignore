@@ -20,6 +20,8 @@ lists/deltas.jsonl
 lists/failed_artists.json
 lists/artists_index.json
 lists/final_list.txt
+lists/
+logs/
 Artists/
 
 # --- Python ---

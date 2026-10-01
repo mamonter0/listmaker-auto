@@ -12,7 +12,7 @@ Solo lee: no descarga ni modifica nada. Deja el resultado en
 USO:
     python scripts/audit_missing_chapters.py
     python scripts/audit_missing_chapters.py --limit 5     # primeros N autores
-    python scripts/audit_missing_chapters.py --artist koss # un autor suelto
+    python scripts/audit_missing_chapters.py --artist <slug> # un autor suelto
 """
 import argparse
 import difflib
@@ -36,6 +36,7 @@ from src.config import (
     parse_artists_file,
 )
 from src.drive_auth import get_drive
+from src.runlog import public
 from src.writer import Writer
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -107,14 +108,15 @@ def main():
 
     entries = parse_artists_file(ARTISTS_FILE)
     if args.artist:
-        # Acepta varios separados por coma: "fakeking,infonticus"
+        # Acepta varios separados por coma: "<slug1>,<slug2>"
         wanted = [a.strip().lower() for a in args.artist.split(",") if a.strip()]
         entries = [e for e in entries if any(a in e[0].lower() for a in wanted)]
         if not entries:
-            sys.exit(f"Ningun perfil de artists.txt casa con {wanted}")
+            public(f"Ningun perfil de artists.txt casa con el filtro ({len(wanted)} valores).")
+            sys.exit(1)
     if args.limit:
         entries = entries[: args.limit]
-    print(f"Auditando {len(entries)} autores...\n")
+    public(f"Auditando {len(entries)} autores...")
 
     artists_index = {}
     if os.path.exists(ARTISTS_INDEX_FILE):
@@ -128,7 +130,8 @@ def main():
 
     try:
         if not w.load_cookies():
-            sys.exit("No se pudieron cargar las cookies.")
+            public("No se pudieron cargar las cookies.")
+            sys.exit(1)
 
         for i, (profile_url, read_only) in enumerate(entries, 1):
             if read_only:
@@ -140,6 +143,7 @@ def main():
             threads = w.find_thread_urls_for_artist(profile_url)
             if not threads:
                 print("   sin hilos (perfil caido o sin resultados)")
+                public(f"Autor {i}/{len(entries)}: sin hilos")
                 stats["no_threads"] += 1
                 continue
 
@@ -152,6 +156,7 @@ def main():
                 cerca = difflib.get_close_matches(folder, todas, n=3, cutoff=0.6)
                 print(f"   !! sin carpeta en Drive para '{folder}'. Parecidas: {cerca}")
 
+            missing_before = stats["missing"]
             for th_title, th_url in threads.items():
                 stats["threads"] += 1
                 th_folder = w.sanitize_filename(th_title)
@@ -183,6 +188,8 @@ def main():
                         "thread_url": th_url,
                         "chapters": gaps,
                     }
+            public(f"Autor {i}/{len(entries)}: {len(threads)} hilos en el foro, "
+                   f"{len(drive_folders)} en Drive, faltan {stats['missing'] - missing_before}")
     finally:
         w.close()
 
@@ -190,14 +197,14 @@ def main():
     with open(OUT_FILE, "w", encoding="utf-8") as fh:
         json.dump(missing, fh, indent=2, ensure_ascii=False)
 
-    print("\n" + "=" * 55)
-    print(f"Hilos revisados       : {stats['threads']}")
-    print(f"Capitulos en el foro  : {stats['chapters']}")
-    print(f"PDFs en Drive         : {total_have}")
-    print(f"FALTAN                : {stats['missing']}")
-    print(f"Autores sin hilos     : {stats['no_threads']}")
-    print(f"Detalle en            : {OUT_FILE}")
-    print("=" * 55)
+    public("\n" + "=" * 55)
+    public(f"Hilos revisados       : {stats['threads']}")
+    public(f"Capitulos en el foro  : {stats['chapters']}")
+    public(f"PDFs en Drive         : {total_have}")
+    public(f"FALTAN                : {stats['missing']}")
+    public(f"Autores sin hilos     : {stats['no_threads']}")
+    public(f"Detalle en            : {OUT_FILE} (en Drive)")
+    public("=" * 55)
 
 
 if __name__ == "__main__":

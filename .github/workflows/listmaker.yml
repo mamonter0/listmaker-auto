@@ -92,6 +92,9 @@ jobs:
       FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
       ARTISTS_TXT_B64: ${{ secrets.ARTISTS_TXT_B64 }}
       ARTISTS_FOLDER_ID: ${{ secrets.ARTISTS_FOLDER_ID }}
+      # El repo y sus logs son publicos: el detalle (autores, hilos, capitulos)
+      # va a logs/run_log.txt y de ahi a Drive; aqui solo salen contadores.
+      PRIVATE_LOG: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -142,13 +145,9 @@ jobs:
           echo "write outcome: ${{ steps.write.outcome }}"
           exit 1
 
-      - name: Upload failure report as artifact
+      # Sin artifacts: en un repo publico cualquiera puede descargarlos.
+      # failed_artists.json y deltas.jsonl ya estan en Drive (lists/).
+      - name: Save private log to Drive
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: failed-artists
-          path: |
-            lists/failed_artists.json
-            lists/deltas.jsonl
-          if-no-files-found: ignore
-          retention-days: 30
+        continue-on-error: true
+        run: python scripts/save_log.py

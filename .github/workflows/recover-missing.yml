@@ -13,7 +13,7 @@ on:
       artists:
         description: "Subcadenas de perfil separadas por coma (solo se usa al construir la cola)"
         type: string
-        default: "fakeking,sir-lucifer-morningstar,infonticus,wiererid"
+        default: ""
       batch:
         description: "Capitulos por ejecucion"
         type: string
@@ -49,8 +49,21 @@ jobs:
       FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
       FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
       ARTISTS_TXT_B64: ${{ secrets.ARTISTS_TXT_B64 }}
+      PRIVATE_LOG: "1"   # detalle a Drive, no al log publico (ver listmaker.yml)
 
     steps:
+      # Un input interpolado con ${{ }} sale en claro en el log publico. Lo
+      # leemos del evento, lo enmascaramos y lo pasamos por GITHUB_ENV.
+      - name: Read inputs (masked)
+        run: |
+          ARTISTS=$(jq -r '.inputs.artists // ""' "$GITHUB_EVENT_PATH")
+          if [ -n "$ARTISTS" ]; then
+            echo "::add-mask::$ARTISTS"
+            IFS=',' read -ra parts <<< "$ARTISTS"
+            for p in "${parts[@]}"; do p="${p// /}"; [ -n "$p" ] && echo "::add-mask::$p"; done
+          fi
+          echo "RECOVER_ARTISTS=$ARTISTS" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -74,7 +87,7 @@ jobs:
         continue-on-error: true
         run: |
           python scripts/recover_missing.py \
-            --artists "${{ inputs.artists || 'fakeking,sir-lucifer-morningstar,infonticus,wiererid' }}" \
+            --artists "$RECOVER_ARTISTS" \
             --batch ${{ inputs.batch || '200' }} \
             ${{ inputs.rebuild && '--rebuild' || '' }}
 
@@ -100,3 +113,8 @@ jobs:
         run: |
           echo "recover outcome: ${{ steps.recover.outcome }}"
           exit 1
+
+      - name: Save private log to Drive
+        if: always()
+        continue-on-error: true
+        run: python scripts/save_log.py
