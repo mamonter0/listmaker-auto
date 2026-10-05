@@ -4,8 +4,8 @@ on:
   schedule:
     # RED DE SEGURIDAD. El disparo principal es externo: cron-job.org llama a
     # la API (workflow_dispatch) a las 09:00 y a las 23:00 hora de Madrid,
-    # puntual al minuto. Estos crons de GitHub solo se ejecutan si en las 8h
-    # anteriores NO hubo un run lanzado a mano/externo (ver `gate`).
+    # puntual al minuto. Estos crons de GitHub solo se ejecutan si desde su
+    # hora programada NO hubo un run lanzado a mano/externo (ver `gate`).
     #
     # Van 5 minutos DESPUES de cada disparo externo, a proposito: GitHub los
     # arranca con 2-7h de retraso, pero si algun dia fuera puntual tampoco
@@ -51,17 +51,26 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          # Respaldo del disparo externo: si en las ultimas 8h ya hubo un run
-          # lanzado por workflow_dispatch (en curso o terminado bien), este cron
-          # retrasado sobra. Los fallidos no cuentan: asi reintenta. Si la
-          # consulta falla, se ejecuta (mejor un run de mas que uno de menos).
-          since=$(date -u -d '8 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          # Respaldo del disparo externo: si desde la hora a la que tocaba este
+          # cron ya hubo un run lanzado por workflow_dispatch (en curso o
+          # terminado bien), este cron retrasado sobra. Los fallidos no cuentan:
+          # asi reintenta. Si la consulta falla, se ejecuta (mejor un run de
+          # mas que uno de menos).
+          #
+          # La ventana se cuenta desde la hora PROGRAMADA del cron (menos 20
+          # min de margen), no "N horas atras": GitHub llega a retrasarlo mas
+          # de 8h, y con una ventana fija el disparo externo quedaba fuera y se
+          # repetia el scrapeo entero sin necesidad.
+          min=$(echo "$SCHEDULE" | cut -d' ' -f1); hour=$(echo "$SCHEDULE" | cut -d' ' -f2)
+          slot=$(date -u -d "today $hour:$min" +%s)
+          [ "$slot" -gt "$(date -u +%s)" ] && slot=$((slot - 86400))
+          since=$(date -u -d "@$((slot - 1200))" +%Y-%m-%dT%H:%M:%SZ)
           recent=$(gh api -X GET "repos/$REPO/actions/workflows/listmaker.yml/runs"                      -f event=workflow_dispatch -f created=">=$since" -f per_page=20                      --jq '[.workflow_runs[] | select(.status != "completed" or .conclusion == "success")] | length'                    ) || recent=0
           if [ "${recent:-0}" -gt 0 ]; then
             echo "Cron '$SCHEDULE': ya hubo $recent run(s) externo(s)/manual(es) desde $since. Se salta."
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Cron '$SCHEDULE' (Madrid $offset): no hubo disparo externo en 8h, se ejecuta como respaldo."
+            echo "Cron '$SCHEDULE' (Madrid $offset): no hubo disparo externo desde $since, se ejecuta como respaldo."
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
