@@ -101,14 +101,17 @@ jobs:
       FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
       ARTISTS_TXT_B64: ${{ secrets.ARTISTS_TXT_B64 }}
       ARTISTS_FOLDER_ID: ${{ secrets.ARTISTS_FOLDER_ID }}
+      # Fecha de la ultima renovacion del token de Drive (la escribe
+      # renew_drive_token.py) para la seccion AVISOS del informe.
+      GDRIVE_TOKEN_ISSUED: ${{ vars.GDRIVE_TOKEN_ISSUED }}
       # El repo y sus logs son publicos: el detalle (autores, hilos, capitulos)
       # va a logs/run_log.txt y de ahi a Drive; aqui solo salen contadores.
       PRIVATE_LOG: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -167,3 +170,20 @@ jobs:
         if: always()
         continue-on-error: true
         run: python scripts/save_log.py
+
+  # Aviso por email: si el token de Drive o las cookies del foro estan a punto
+  # de caducar, este job falla y GitHub manda el correo de "run failed". La
+  # pipeline (job `run`) va aparte y no se ve afectada. No toca foro ni Drive.
+  avisos:
+    needs: [gate, run]
+    if: always() && needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
+      GDRIVE_TOKEN_ISSUED: ${{ vars.GDRIVE_TOKEN_ISSUED }}
+    steps:
+      - uses: actions/checkout@v7
+      # Solo biblioteca estandar: vale el python3 que trae el runner.
+      - name: Check credential expiry
+        run: python3 scripts/check_expiry.py

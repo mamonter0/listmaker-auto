@@ -19,6 +19,8 @@ DELTA_FILE = os.path.join(LIST_DIR, "deltas.txt")
 DELTA_JSONL_FILE = os.path.join(LIST_DIR, "deltas.jsonl")
 OUTPUT_FILE = os.path.join(LIST_DIR, "final_list.txt")
 FAILED_FILE = os.path.join(LIST_DIR, "failed_artists.json")
+# Runs seguidos que lleva fallando cada perfil ({url: {count, reason, since}}).
+FAIL_STREAKS_FILE = os.path.join(LIST_DIR, "failure_streaks.json")
 ARTISTS_INDEX_FILE = os.path.join(LIST_DIR, "artists_index.json")
 SEEN_REMOVALS_FILE = os.path.join(LIST_DIR, "seen_removals.json")
 PENDING_CHAPTERS_FILE = os.path.join(LIST_DIR, "pending_chapters.json")

@@ -25,6 +25,7 @@ from .config import (
     COOKIES_FILE,
     DELTA_FILE,
     DELTA_JSONL_FILE,
+    FAIL_STREAKS_FILE,
     FAILED_FILE,
     HISTORY_FILE,
     LIST_DIR,
@@ -50,6 +51,7 @@ class ListMaker:
         self.read_only_urls = set()      # URLs marcadas read_only en artists.txt
         self.read_only_authors = set()   # nombres de autor resueltos como read_only
         self._pos = ""                   # "12/44": autor en curso, para la consola pública
+        self.processed_urls = []         # perfiles que se llegaron a intentar este run
 
     def _build_driver(self):
         options = Options()
@@ -420,6 +422,7 @@ class ListMaker:
 
         for pos, url in enumerate(urls, 1):
             self._pos = f"{pos}/{len(urls)}"
+            self.processed_urls.append(url)
             print("=" * 60)
             print(f"[{self._pos}] {url}")
 
@@ -572,15 +575,55 @@ class ListMaker:
             )
 
     def save_failed_report(self):
-        if not self.failed_artists:
-            return
+        # Se escribe siempre, también vacío: si no, el de un run anterior se
+        # quedaba en Drive y parecía que seguía fallando.
         try:
             os.makedirs(LIST_DIR, exist_ok=True)
             with open(FAILED_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.failed_artists, f, indent=2, ensure_ascii=False)
-            print(f"{len(self.failed_artists)} artistas con incidencias en: {FAILED_FILE}")
+            if self.failed_artists:
+                print(f"{len(self.failed_artists)} artistas con incidencias en: {FAILED_FILE}")
         except Exception as e:
             print(f"No se pudo guardar el reporte de fallos: {e}")
+        self._update_failure_streaks()
+
+    def _update_failure_streaks(self):
+        """Cuenta cuántos runs seguidos lleva fallando cada perfil.
+
+        Si falló más de la mitad, el problema es general (cookies, bloqueo) y
+        no de esos autores: no se toca la cuenta.
+        """
+        if not self.processed_urls:
+            return
+        failed = {f["url"]: f for f in self.failed_artists}
+        if len(failed) / len(self.processed_urls) > 0.5:
+            return
+        streaks = {}
+        if os.path.exists(FAIL_STREAKS_FILE):
+            try:
+                with open(FAIL_STREAKS_FILE, "r", encoding="utf-8") as f:
+                    streaks = json.load(f)
+            except Exception:
+                streaks = {}
+        today = datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y-%m-%d")
+        for url in self.processed_urls:
+            if url in failed:
+                prev = streaks.get(url, {})
+                streaks[url] = {
+                    "count": prev.get("count", 0) + 1,
+                    "reason": failed[url].get("reason", ""),
+                    "since": prev.get("since", today),
+                }
+            else:
+                streaks.pop(url, None)
+        # Autores quitados de la lista: fuera también de aquí.
+        current = {u for u, _ in parse_artists_file(ARTISTS_FILE)}
+        streaks = {u: s for u, s in streaks.items() if u in current}
+        try:
+            with open(FAIL_STREAKS_FILE, "w", encoding="utf-8") as f:
+                json.dump(streaks, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"No se pudo guardar {FAIL_STREAKS_FILE}: {e}")
 
     def _load_seen_removals(self):
         """Devuelve los sets de removals ya reportados en runs anteriores.
