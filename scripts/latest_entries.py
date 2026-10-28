@@ -1,5 +1,8 @@
 """Genera lists/ultimas_entradas.txt: los últimos capítulos de cada autor por fecha.
 
+Arriba va un resumen de actividad (autores ordenados por su última entrada,
+el que lleva más tiempo sin publicar primero) y debajo el detalle por autor.
+
 Lee la fecha del nombre de cada PDF en Drive (2024-03-15_10-23_Titulo.pdf), así
 que no toca el foro. Se regenera entero en cada run: refleja lo que hay en Drive.
 
@@ -91,13 +94,25 @@ def main():
         thread = path[1] + (f" [{'/'.join(path[2:])}]" if len(path) > 2 else "")
         entries.setdefault(path[0], []).append((when, thread, chapter))
 
-    now = datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y-%m-%d %H:%M")
+    today = datetime.now(ZoneInfo("Europe/Madrid"))
+    now = today.strftime("%Y-%m-%d %H:%M")
     lines = [
         "=" * 60,
         f"Últimas {args.per_author} entradas por autor — {now}",
         "(más reciente primero; fecha de publicación en el foro)",
         "=" * 60,
     ]
+
+    # Resumen de actividad: autores por su última entrada, el más parado arriba.
+    # Sirve para ver de un vistazo quién lleva tiempo sin publicar.
+    last = {a: max(e)[0] for a, e in entries.items() if e}
+    lines += ["", "ACTIVIDAD (autor por su última entrada, el más antiguo primero)"]
+    for author in sorted(last, key=lambda a: last[a]):
+        days = (today.date() - datetime.strptime(last[author][:10], "%Y-%m-%d").date()).days
+        lines.append(f"  {last[author][:10]}  hace {days:>4} días  {author}")
+    for author in sorted((a for a in entries if a not in last), key=str.lower):
+        lines.append(f"  (sin fecha)                  {author}")
+    lines += ["", "=" * 60, "DETALLE POR AUTOR", "=" * 60]
     for author in sorted(entries, key=str.lower):
         latest = sorted(entries[author], reverse=True)[: args.per_author]
         lines.append("")
