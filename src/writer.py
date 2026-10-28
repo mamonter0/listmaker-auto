@@ -26,7 +26,10 @@ from .config import (
     DELTA_FILE,
     DELTA_JSONL_FILE,
     LOCAL_FOLDER,
+    LOST_CHAPTERS_FILE,
+    MAX_CHAPTER_ATTEMPTS,
     MAX_PAGES_PER_LOOP,
+    PENDING_ATTEMPTS_FILE,
     PENDING_CHAPTERS_FILE,
     WRITER_RATE_LIMIT_BACKOFF,
     parse_artists_file,
@@ -42,6 +45,9 @@ class Writer:
         self._rl_attempts = 0
         self.saved = 0    # PDFs generados en este run (para la consola pública)
         self.failed = 0
+        self.attempts = self._load_json(PENDING_ATTEMPTS_FILE, {})
+        self.lost = self._load_json(LOST_CHAPTERS_FILE, [])
+        self._failed_now = []  # (clave, artista, hilo, capítulo) que no dieron PDF este run
         self._build_driver()
 
     def _build_driver(self):
@@ -230,8 +236,8 @@ class Writer:
 
     def _load_pending(self):
         """Carga capítulos pendientes de runs anteriores que no se descargaron.
-        Formato: {artist: {thread: [chapter_names]}}. Nunca contiene "__ALL__"
-        (lo expandimos a nombres concretos antes de persistir).
+        Formato: {artist: {thread: [chapter_names]}}. Solo contiene "__ALL__"
+        si el índice del hilo no se pudo leer (si no, se expande a nombres).
         """
         if not os.path.exists(PENDING_CHAPTERS_FILE):
             return {}
@@ -281,6 +287,59 @@ class Writer:
         if artist in pending and thread in pending[artist]:
             if chapter in pending[artist][thread]:
                 pending[artist][thread].remove(chapter)
+        self.attempts.pop(f"{artist}|{thread}|{chapter}", None)
+
+    @staticmethod
+    def _load_json(path, default):
+        if not os.path.exists(path):
+            return default
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, type(default)) else default
+        except Exception as e:
+            print(f"{path} ilegible, se reinicia: {e}")
+            return default
+
+    def _mark_lost(self, pending, artist, thread, chapter, reason):
+        """Saca un capítulo de la cola para siempre y lo apunta en lost_chapters.json."""
+        self._mark_done(pending, artist, thread, chapter)
+        self.lost.append({
+            "artist": artist, "thread": thread, "chapter": chapter, "reason": reason,
+            "date": time.strftime("%Y-%m-%d %H:%M"),
+        })
+
+    def _count_failed_attempts(self, pending):
+        """Suma un intento a cada capítulo que no dio PDF en este run.
+
+        Si en el run no salió NINGÚN PDF y fallaron varios, el problema es
+        general (foro caído, HTML cambiado, Chrome roto), no de esos
+        capítulos: no se cuenta, para no dar por perdida media cola por una
+        avería de unos días.
+        """
+        if not self._failed_now:
+            return
+        if self.saved == 0 and len(self._failed_now) > 3:
+            public(f"{len(self._failed_now)} capítulos sin PDF y ninguno bueno: fallo general, no cuento intentos.")
+            return
+        lost = 0
+        for key, artist, thread, chapter in self._failed_now:
+            n = self.attempts.get(key, 0) + 1
+            if n >= MAX_CHAPTER_ATTEMPTS:
+                self._mark_lost(pending, artist, thread, chapter, f"sin PDF tras {n} intentos")
+                lost += 1
+            else:
+                self.attempts[key] = n
+        if lost:
+            public(f"{lost} capítulos dados por perdidos tras {MAX_CHAPTER_ATTEMPTS} intentos (ver {LOST_CHAPTERS_FILE}).")
+
+    def _save_attempts(self):
+        for path, data in ((PENDING_ATTEMPTS_FILE, self.attempts), (LOST_CHAPTERS_FILE, self.lost)):
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                print(f"No se pudo guardar {path}: {e}")
 
     def parse_deltas_jsonl(self):
         """Lee la última línea del deltas.jsonl. Devuelve None si no hay JSONL utilizable."""
@@ -589,6 +648,7 @@ class Writer:
         return chapter_map
 
     def isolate_and_print(self, save_path):
+        """Aísla el post y lo imprime a PDF. True solo si el PDF quedó en disco."""
         try:
             js_isolate = r"""
                 var target = null;
@@ -712,13 +772,14 @@ class Writer:
                     f.write(base64.b64decode(result["data"]))
                 print(f"      PDF Guardado: {os.path.basename(save_path)}")
                 self.saved += 1
-            else:
-                print("      No se pudo aislar el post.")
-                self.failed += 1
+                return os.path.exists(save_path)
+            print("      No se pudo aislar el post.")
+            self.failed += 1
 
         except Exception as e:
             print(f"      Error generando PDF: {e}")
             self.failed += 1
+        return False
 
     def run(self):
         if not self.load_cookies():
@@ -800,6 +861,14 @@ class Writer:
 
                     print("      ... Escaneando índice de capítulos...")
                     chapter_map = self.get_all_chapter_urls(thread_base_url)
+                    if not chapter_map:
+                        # Indice vacio = no se pudo leer (red, rate limit...), no
+                        # que el hilo no tenga capitulos. Si siguieramos, todos
+                        # sus capitulos saldrian como "no hallados" y se
+                        # descartarian. Se quedan en pending para el proximo run.
+                        print("      Indice de capitulos vacio — lo dejo para el proximo run.")
+                        threads_missing += 1
+                        continue
 
                     if "__ALL__" in chapters:
                         to_download = list(chapter_map.keys())
@@ -814,8 +883,10 @@ class Writer:
                         if chap_name not in chapter_map:
                             print(f"      Cap no hallado: {chap_name}")
                             # No lo encontramos en el índice — sacarlo del pending,
-                            # no tiene sentido reintentar lo inexistente.
-                            self._mark_done(pending, artist_name, thread_title, chap_name)
+                            # no tiene sentido reintentar lo inexistente. Queda
+                            # apuntado para que se vea en el informe.
+                            self._mark_lost(pending, artist_name, thread_title, chap_name,
+                                            "ya no está en el índice del hilo")
                             continue
 
                         chap_info = chapter_map[chap_name]
@@ -851,9 +922,16 @@ class Writer:
                             # antes que "Chapter Two".
                             date_prefix = f"{post_dt}_" if post_dt else ""
                             pdf_path = os.path.join(final_save_dir, f"{date_prefix}{safe_ch}.pdf")
-                            self.isolate_and_print(pdf_path)
-                            # Éxito: descontar de pending.
-                            self._mark_done(pending, artist_name, thread_title, chap_name)
+                            # Solo se da por hecho si el PDF existe. Antes se
+                            # descontaba siempre, y un capitulo cuyo post no se
+                            # pudo aislar o imprimir se perdia sin reintentarse.
+                            if self.isolate_and_print(pdf_path):
+                                self._mark_done(pending, artist_name, thread_title, chap_name)
+                            else:
+                                self._failed_now.append((
+                                    f"{artist_name}|{thread_title}|{chap_name}",
+                                    artist_name, thread_title, chap_name,
+                                ))
                             try:
                                 self.driver.get("about:blank")
                             except WebDriverException:
@@ -877,11 +955,13 @@ class Writer:
                 public(
                     f"{tag}: {self.saved - saved_before} PDFs, "
                     f"{self.failed - failed_before} fallidos"
-                    + (f", {threads_missing} hilos no encontrados" if threads_missing else "")
+                    + (f", {threads_missing} hilos sin leer (quedan pendientes)" if threads_missing else "")
                 )
         finally:
             public(f"Writer: {self.saved} PDFs generados, {self.failed} fallidos.")
+            self._count_failed_attempts(pending)
             self._save_pending(pending)
+            self._save_attempts()
 
     def close(self):
         if self.driver:
