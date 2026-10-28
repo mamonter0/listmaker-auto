@@ -22,6 +22,12 @@ FAILED_FILE = os.path.join(LIST_DIR, "failed_artists.json")
 ARTISTS_INDEX_FILE = os.path.join(LIST_DIR, "artists_index.json")
 SEEN_REMOVALS_FILE = os.path.join(LIST_DIR, "seen_removals.json")
 PENDING_CHAPTERS_FILE = os.path.join(LIST_DIR, "pending_chapters.json")
+# Intentos fallidos por capítulo ({"autor|hilo|capitulo": n}) y capítulos dados
+# por perdidos. Un capítulo cuyo PDF no sale en MAX_CHAPTER_ATTEMPTS runs
+# distintos deja de reintentarse y pasa a lost_chapters.json.
+PENDING_ATTEMPTS_FILE = os.path.join(LIST_DIR, "pending_attempts.json")
+LOST_CHAPTERS_FILE = os.path.join(LIST_DIR, "lost_chapters.json")
+MAX_CHAPTER_ATTEMPTS = 5
 
 LOCAL_FOLDER = "Artists"
 DRIVE_TARGET_FOLDER = "Artists"
