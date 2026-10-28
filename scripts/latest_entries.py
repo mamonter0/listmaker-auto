@@ -16,15 +16,23 @@ USO:
 import argparse
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import LISTS_FOLDER
+from src.config import (
+    ARTISTS_INDEX_FILE,
+    FAIL_STREAKS_FILE,
+    LISTS_FOLDER,
+    LOST_CHAPTERS_FILE,
+    PENDING_ATTEMPTS_FILE,
+    PENDING_CHAPTERS_FILE,
+)
 from src.drive_auth import get_drive
 from src.drive_lists import FOLDER_MIME, artists_root_id, write_text
+from src.health import FAIL_STREAK_WARN, expiry_warnings, load_json
 from src.runlog import public
 
 OUT_NAME = "ultimas_entradas.txt"
@@ -46,6 +54,52 @@ def parse_pdf_name(title):
         name, day, hh, mm = m.groups()
     when = f"{day} {hh}:{mm}" if hh else f"{day}      "
     return when, name
+
+
+def status_sections(today):
+    """AVISOS (caducidades) y PROBLEMAS (autores que fallan, capítulos atascados).
+
+    Lee los ficheros de lists/ que hay en local: en listmaker.yml son los de
+    este mismo run; en latest-entries.yml, los que baja download.py.
+    """
+    lines = ["", "AVISOS"]
+    for urgent, text in expiry_warnings():
+        lines.append(("  !! " if urgent else "  ok ") + text)
+
+    lines += ["", "PROBLEMAS"]
+    n_before = len(lines)
+    url_to_name = {u: n for n, u in load_json(ARTISTS_INDEX_FILE, {}).items()}
+
+    streaks = load_json(FAIL_STREAKS_FILE, {})
+    bad = sorted((s["count"], u, s) for u, s in streaks.items() if s.get("count", 0) >= FAIL_STREAK_WARN)
+    if bad:
+        lines.append(f"  Autores que fallan {FAIL_STREAK_WARN}+ ejecuciones seguidas:")
+        for count, url, s in reversed(bad):
+            who = url_to_name.get(url) or url.rstrip("/").split("/")[-1]
+            lines.append(f"    {who}: {count} seguidas desde {s.get('since', '?')} ({s.get('reason', '')})")
+
+    pending = load_json(PENDING_CHAPTERS_FILE, {})
+    attempts = load_json(PENDING_ATTEMPTS_FILE, {})
+    stuck = [(a, t, c) for a, ths in pending.items() for t, cs in ths.items() for c in cs]
+    if stuck:
+        lines.append(f"  Capítulos pendientes de descargar: {len(stuck)}")
+        for a, t, c in stuck[:20]:
+            n = attempts.get(f"{a}|{t}|{c}", 0)
+            lines.append(f"    {a} / {t} / {c}" + (f"  ({n} intentos fallidos)" if n else ""))
+        if len(stuck) > 20:
+            lines.append(f"    ... y {len(stuck) - 20} más")
+
+    cutoff = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    lost = [x for x in load_json(LOST_CHAPTERS_FILE, []) if x.get("date", "") >= cutoff]
+    if lost:
+        lines.append(f"  Capítulos dados por perdidos (últimos 30 días): {len(lost)}")
+        for x in lost[-20:]:
+            lines.append(f"    {x.get('date', '')[:10]}  {x.get('artist')} / {x.get('thread')} / "
+                         f"{x.get('chapter')} — {x.get('reason')}")
+
+    if len(lines) == n_before:
+        lines.append("  Ninguno.")
+    return lines
 
 
 def list_all(drive, q):
@@ -102,6 +156,7 @@ def main():
         "(más reciente primero; fecha de publicación en el foro)",
         "=" * 60,
     ]
+    lines += status_sections(today)
 
     # Resumen de actividad: autores por su última entrada, el más parado arriba.
     # Sirve para ver de un vistazo quién lleva tiempo sin publicar.

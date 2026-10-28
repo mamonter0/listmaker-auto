@@ -29,18 +29,26 @@ jobs:
       ARTISTS_FOLDER_ID: ${{ secrets.ARTISTS_FOLDER_ID }}
       # config.py aborta si no esta definida, aunque aqui no se navegue el foro
       FORUM_BASE_URL: ${{ secrets.FORUM_BASE_URL }}
+      # Solo para las secciones AVISOS/PROBLEMAS (fechas de caducidad).
+      FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
+      GDRIVE_TOKEN_ISSUED: ${{ vars.GDRIVE_TOKEN_ISSUED }}
       PRIVATE_LOG: "1"   # detalle a Drive, no al log publico (ver listmaker.yml)
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      # Trae lists/ (pendientes, fallos...) para la seccion PROBLEMAS. Solo
+      # lee: este workflow no sube nada salvo ultimas_entradas.txt y el log.
+      - name: Download state from Drive
+        run: python scripts/download.py
 
       - name: Latest entries per author
         run: python scripts/latest_entries.py --per-author "${{ inputs.per_author }}"
