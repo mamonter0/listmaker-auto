@@ -127,6 +127,7 @@ def main():
         key=str.lower,
     )
     entries = {a: [] for a in authors}
+    has_pdfs = set()  # carpetas con algún PDF, con o sin fecha
     undated = 0
 
     for pdf in pdfs:
@@ -140,6 +141,7 @@ def main():
             node = parent
         if node != root or len(path) < 2 or path[0] == LISTS_FOLDER:
             continue  # PDF fuera de Artists/ o mal colocado
+        has_pdfs.add(path[0])
         parsed = parse_pdf_name(pdf["title"])
         if parsed is None:
             undated += 1
@@ -147,6 +149,10 @@ def main():
         when, chapter = parsed
         thread = path[1] + (f" [{'/'.join(path[2:])}]" if len(path) > 2 else "")
         entries.setdefault(path[0], []).append((when, thread, chapter))
+
+    # Una carpeta de Artists/ sin ningún PDF no es un autor (p. ej. una copia
+    # de seguridad guardada ahí a mano, o un autor que nunca llegó a bajar nada).
+    entries = {a: e for a, e in entries.items() if a in has_pdfs}
 
     today = datetime.now(ZoneInfo("Europe/Madrid"))
     now = today.strftime("%Y-%m-%d %H:%M")
