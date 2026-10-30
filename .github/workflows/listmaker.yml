@@ -57,6 +57,11 @@ jobs:
           # asi reintenta. Si la consulta falla, se ejecuta (mejor un run de
           # mas que uno de menos).
           #
+          # "Terminado bien" se mira en el job `run`, no en el run entero: el
+          # job `avisos` se pone en rojo a proposito cuando una credencial esta
+          # a punto de caducar, y eso marca todo el run como fallido aunque el
+          # scrapeo haya ido bien.
+          #
           # La ventana se cuenta desde la hora PROGRAMADA del cron (menos 20
           # min de margen), no "N horas atras": GitHub llega a retrasarlo mas
           # de 8h, y con una ventana fija el disparo externo quedaba fuera y se
@@ -65,7 +70,17 @@ jobs:
           slot=$(date -u -d "today $hour:$min" +%s)
           [ "$slot" -gt "$(date -u +%s)" ] && slot=$((slot - 86400))
           since=$(date -u -d "@$((slot - 1200))" +%Y-%m-%dT%H:%M:%SZ)
-          recent=$(gh api -X GET "repos/$REPO/actions/workflows/listmaker.yml/runs"                      -f event=workflow_dispatch -f created=">=$since" -f per_page=20                      --jq '[.workflow_runs[] | select(.status != "completed" or .conclusion == "success")] | length'                    ) || recent=0
+          runs=$(gh api -X GET "repos/$REPO/actions/workflows/listmaker.yml/runs" \
+                   -f event=workflow_dispatch -f created=">=$since" -f per_page=20 \
+                   --jq '.workflow_runs[] | select(.status != "completed" or .conclusion == "success" or .conclusion == "failure") | "\(.id):\(.status)"' \
+                 ) || runs=""
+          recent=0
+          for r in $runs; do
+            if [ "${r#*:}" != "completed" ]; then recent=$((recent + 1)); continue; fi
+            ok=$(gh api "repos/$REPO/actions/runs/${r%%:*}/jobs" \
+                   --jq '[.jobs[] | select(.name == "run" and .conclusion == "success")] | length') || ok=0
+            if [ "${ok:-0}" -gt 0 ]; then recent=$((recent + 1)); fi
+          done
           if [ "${recent:-0}" -gt 0 ]; then
             echo "Cron '$SCHEDULE': ya hubo $recent run(s) externo(s)/manual(es) desde $since. Se salta."
             echo "run=false" >> "$GITHUB_OUTPUT"
