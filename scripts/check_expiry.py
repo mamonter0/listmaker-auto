@@ -1,4 +1,5 @@
-"""Falla (exit 1) si el token de Drive o las cookies del foro están a punto de caducar.
+"""Falla (exit 1) si alguna credencial (token de Drive, cookies del foro, token de
+cron-job.org) está a punto de caducar.
 
 Corre como job aparte ("avisos") en listmaker.yml: al fallar, el run sale en
 rojo y GitHub manda el email de "run failed", aunque la pipeline haya ido bien.
