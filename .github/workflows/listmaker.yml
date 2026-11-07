@@ -119,6 +119,8 @@ jobs:
       # Fecha de la ultima renovacion del token de Drive (la escribe
       # renew_drive_token.py) para la seccion AVISOS del informe.
       GDRIVE_TOKEN_ISSUED: ${{ vars.GDRIVE_TOKEN_ISSUED }}
+      # Caducidad del token de GitHub que usa cron-job.org (se apunta a mano).
+      CRONJOB_PAT_EXPIRES: ${{ vars.CRONJOB_PAT_EXPIRES }}
       # El repo y sus logs son publicos: el detalle (autores, hilos, capitulos)
       # va a logs/run_log.txt y de ahi a Drive; aqui solo salen contadores.
       PRIVATE_LOG: "1"
@@ -170,6 +172,13 @@ jobs:
         continue-on-error: true
         run: python scripts/latest_entries.py
 
+      # lists/caducidades.txt: cuanto le queda exactamente a cada credencial
+      # (token de Drive, cookies, token de cron-job.org). No toca el foro.
+      - name: Credential expiry file
+        if: always()
+        continue-on-error: true
+        run: python scripts/expiry_report.py
+
       # Si scrape o write fallaron, marca el job como failed (después del upload, para
       # que GH Actions mande el email automático al owner del repo).
       - name: Mark job failed if any stage failed
@@ -186,9 +195,10 @@ jobs:
         continue-on-error: true
         run: python scripts/save_log.py
 
-  # Aviso por email: si el token de Drive o las cookies del foro estan a punto
-  # de caducar, este job falla y GitHub manda el correo de "run failed". La
-  # pipeline (job `run`) va aparte y no se ve afectada. No toca foro ni Drive.
+  # Aviso por email: si el token de Drive, las cookies del foro o el token de
+  # cron-job.org estan a punto de caducar, este job falla y GitHub manda el
+  # correo de "run failed". La pipeline (job `run`) va aparte y no se ve
+  # afectada. No toca foro ni Drive.
   avisos:
     needs: [gate, run]
     if: always() && needs.gate.outputs.run == 'true'
@@ -197,6 +207,7 @@ jobs:
     env:
       FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
       GDRIVE_TOKEN_ISSUED: ${{ vars.GDRIVE_TOKEN_ISSUED }}
+      CRONJOB_PAT_EXPIRES: ${{ vars.CRONJOB_PAT_EXPIRES }}
     steps:
       - uses: actions/checkout@v7
       # Solo biblioteca estandar: vale el python3 que trae el runner.

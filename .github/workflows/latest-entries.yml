@@ -1,6 +1,7 @@
 name: latest-entries
 
-# Regenera solo lists/ultimas_entradas.txt a partir de lo que hay en Drive.
+# Regenera lists/ultimas_entradas.txt y lists/caducidades.txt a partir de lo
+# que hay en Drive.
 # NO toca el foro: sirve para probar o refrescar el listado sin lanzar un
 # scrapeo completo. El pipeline principal ya lo regenera en cada run.
 
@@ -32,6 +33,7 @@ jobs:
       # Solo para las secciones AVISOS/PROBLEMAS (fechas de caducidad).
       FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
       GDRIVE_TOKEN_ISSUED: ${{ vars.GDRIVE_TOKEN_ISSUED }}
+      CRONJOB_PAT_EXPIRES: ${{ vars.CRONJOB_PAT_EXPIRES }}
       PRIVATE_LOG: "1"   # detalle a Drive, no al log publico (ver listmaker.yml)
 
     steps:
@@ -46,12 +48,20 @@ jobs:
         run: pip install -r requirements.txt
 
       # Trae lists/ (pendientes, fallos...) para la seccion PROBLEMAS. Solo
-      # lee: este workflow no sube nada salvo ultimas_entradas.txt y el log.
+      # lee: este workflow no sube nada salvo ultimas_entradas.txt,
+      # caducidades.txt y el log.
       - name: Download state from Drive
         run: python scripts/download.py
 
       - name: Latest entries per author
         run: python scripts/latest_entries.py --per-author "${{ inputs.per_author }}"
+
+      # lists/caducidades.txt. renew_drive_token.py lanza este workflow, asi
+      # que el fichero se pone al dia nada mas renovar.
+      - name: Credential expiry file
+        if: always()
+        continue-on-error: true
+        run: python scripts/expiry_report.py
 
       - name: Save private log to Drive
         if: always()
