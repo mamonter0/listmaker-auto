@@ -6,9 +6,6 @@ el que lleva más tiempo sin publicar primero) y debajo el detalle por autor.
 Lee la fecha del nombre de cada PDF en Drive (2024-03-15_10-23_Titulo.pdf), así
 que no toca el foro. Se regenera entero en cada run: refleja lo que hay en Drive.
 
-En vez de recorrer carpeta a carpeta (cientos de llamadas), pide de golpe todas
-las carpetas y todos los PDFs y reconstruye las rutas por sus `parents`.
-
 USO:
     python scripts/latest_entries.py            # 7 por autor
     python scripts/latest_entries.py --per-author 10
@@ -29,14 +26,14 @@ from src.config import (
     LOST_CHAPTERS_FILE,
     PENDING_ATTEMPTS_FILE,
     PENDING_CHAPTERS_FILE,
+    RECONCILE_STATUS_FILE,
 )
 from src.drive_auth import get_drive
-from src.drive_lists import FOLDER_MIME, artists_root_id, write_text
+from src.drive_lists import pdf_paths, write_text
 from src.health import FAIL_STREAK_WARN, expiry_warnings, load_json
 from src.runlog import public
 
 OUT_NAME = "ultimas_entradas.txt"
-FIELDS = "nextPageToken,items(id,title,parents(id))"
 DATE_FIRST = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:_(\d{2})-(\d{2}))?_(.+)$")
 DATE_LAST = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2})(?:_(\d{2})-(\d{2}))?$")
 
@@ -68,6 +65,11 @@ def status_sections(today):
 
     lines += ["", "PROBLEMAS"]
     n_before = len(lines)
+
+    rec = load_json(RECONCILE_STATUS_FILE, {})
+    if rec.get("blocked"):
+        lines.append(f"  !! {rec.get('missing', '?')} capítulos que salieron en algún delta no tienen PDF en Drive.")
+        lines.append("     Son demasiados para reencolarlos solos: revisar a mano (documentación §6.1).")
     url_to_name = {u: n for n, u in load_json(ARTISTS_INDEX_FILE, {}).items()}
 
     streaks = load_json(FAIL_STREAKS_FILE, {})
@@ -102,57 +104,27 @@ def status_sections(today):
     return lines
 
 
-def list_all(drive, q):
-    # Sin maxResults: si se pasa, PyDrive2 GetList() devuelve SOLO la primera
-    # página. Sin él usa páginas de 1000 y las recorre todas.
-    return drive.ListFile({"q": f"{q} and trashed=false", "fields": FIELDS}).GetList()
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--per-author", type=int, default=7)
     args = ap.parse_args()
 
     drive = get_drive()
-    root = artists_root_id(drive)
 
-    folders = {
-        f["id"]: (f["title"], f["parents"][0]["id"] if f.get("parents") else None)
-        for f in list_all(drive, f"mimeType='{FOLDER_MIME}'")
-    }
-    pdfs = list_all(drive, "mimeType='application/pdf'")
-
-    authors = sorted(
-        (title for title, parent in folders.values() if parent == root and title != LISTS_FOLDER),
-        key=str.lower,
-    )
-    entries = {a: [] for a in authors}
-    has_pdfs = set()  # carpetas con algún PDF, con o sin fecha
+    # Solo salen las carpetas con algún PDF (con o sin fecha). Una carpeta de
+    # Artists/ sin ninguno no es un autor (p. ej. una copia de seguridad
+    # guardada ahí a mano, o un autor que nunca llegó a bajar nada).
+    entries = {}
     undated = 0
-
-    for pdf in pdfs:
-        if not pdf.get("parents"):
-            continue
-        # Subir por los padres hasta Artists/: [autor, hilo, (categoría)]
-        path, node = [], pdf["parents"][0]["id"]
-        while node in folders and node != root and len(path) < 6:
-            title, parent = folders[node]
-            path.insert(0, title)
-            node = parent
-        if node != root or len(path) < 2 or path[0] == LISTS_FOLDER:
-            continue  # PDF fuera de Artists/ o mal colocado
-        has_pdfs.add(path[0])
-        parsed = parse_pdf_name(pdf["title"])
+    for path, title in pdf_paths(drive):
+        entries.setdefault(path[0], [])
+        parsed = parse_pdf_name(title)
         if parsed is None:
             undated += 1
             continue
         when, chapter = parsed
         thread = path[1] + (f" [{'/'.join(path[2:])}]" if len(path) > 2 else "")
-        entries.setdefault(path[0], []).append((when, thread, chapter))
-
-    # Una carpeta de Artists/ sin ningún PDF no es un autor (p. ej. una copia
-    # de seguridad guardada ahí a mano, o un autor que nunca llegó a bajar nada).
-    entries = {a: e for a, e in entries.items() if a in has_pdfs}
+        entries[path[0]].append((when, thread, chapter))
 
     today = datetime.now(ZoneInfo("Europe/Madrid"))
     now = today.strftime("%Y-%m-%d %H:%M")

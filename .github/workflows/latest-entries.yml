@@ -56,6 +56,13 @@ jobs:
       - name: Latest entries per author
         run: python scripts/latest_entries.py --per-author "${{ inputs.per_author }}"
 
+      # Solo cuenta cuantos capitulos de los deltas no tienen PDF en Drive; no
+      # escribe nada (el pipeline principal es el que los reencola).
+      - name: Chapters missing in Drive (dry run)
+        if: always()
+        continue-on-error: true
+        run: python scripts/reconcile.py --dry-run
+
       # lists/caducidades.txt. renew_drive_token.py lanza este workflow, asi
       # que el fichero se pone al dia nada mas renovar.
       - name: Credential expiry file

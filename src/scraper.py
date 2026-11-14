@@ -31,6 +31,7 @@ from .config import (
     LIST_DIR,
     MAX_PAGES_PER_LOOP,
     OUTPUT_FILE,
+    PAGE_LOAD_TIMEOUT,
     RATE_LIMIT_BACKOFF,
     SEEN_REMOVALS_FILE,
     parse_artists_file,
@@ -63,6 +64,7 @@ class ListMaker:
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         self.driver = webdriver.Chrome(options=options)
+        self.driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
         self.wait = WebDriverWait(self.driver, 15)
 
     def _driver_alive(self):
@@ -147,7 +149,23 @@ class ListMaker:
             public(f"Error: No se encuentra {COOKIES_FILE}")
             return False
         print("Cargando cookies...")
-        self.driver.get(BASE_URL)
+        # Chrome a veces se queda colgado en la primera carga. Un navegador
+        # nuevo suele bastar; si vuelve a fallar se devuelve False en vez de
+        # dejar escapar la excepción (tumbaba el run sin guardar nada).
+        try:
+            self.driver.get(BASE_URL)
+        except Exception as e:
+            public(f"La portada no cargó ({type(e).__name__}); reinicio Chrome y reintento.")
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            try:
+                self._build_driver()
+                self.driver.get(BASE_URL)
+            except Exception as e2:
+                public(f"La portada sigue sin cargar ({type(e2).__name__}).")
+                return False
         time.sleep(2)
         try:
             with open(COOKIES_FILE, "rb") as f:

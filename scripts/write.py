@@ -19,7 +19,7 @@ def main():
         print("\nDetenido.")
         exit_code = 130
     except RuntimeError as e:
-        public(f"\nAbortado por rate limit: {redact(e)}")
+        public(f"\nAbortado: {redact(e)}")
         exit_code = 3
     finally:
         bot.close()

@@ -10,7 +10,8 @@ from src.downloader import GDriveDownloader
 def main():
     downloader = GDriveDownloader()
     try:
-        downloader.run()
+        if not downloader.run():
+            sys.exit(1)
     except KeyboardInterrupt:
         print("\nDetenido por el usuario.")
         sys.exit(130)

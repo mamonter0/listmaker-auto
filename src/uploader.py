@@ -1,4 +1,5 @@
 import os
+import time
 
 from .config import (
     ARTISTS_FOLDER_ID,
@@ -9,6 +10,7 @@ from .config import (
     RUN_LOG_NAME,
 )
 from .drive_auth import get_drive
+from .drive_lists import RETRY_DELAYS, with_retries
 from .runlog import public
 
 
@@ -30,11 +32,12 @@ class GDriveUploader:
             f"title='{safe_name}' and '{parent_id}' in parents "
             f"and mimeType='application/vnd.google-apps.folder' and trashed=false"
         )
-        try:
-            file_list = self.drive.ListFile({"q": query}).GetList()
-        except Exception as e:
-            print(f"   Error buscando carpeta '{folder_name}': {e}")
-            file_list = []
+        # Si la búsqueda falla del todo se relanza el error: crear la carpeta
+        # sin saber si existe la duplicaría.
+        file_list = with_retries(
+            lambda: self.drive.ListFile({"q": query}).GetList(),
+            f"Error buscando carpeta '{folder_name}'",
+        )
 
         if file_list:
             print(f"   Carpeta Drive existente: {folder_name}")
@@ -49,16 +52,61 @@ class GDriveUploader:
         folder.Upload()
         return folder["id"]
 
+    def _exists(self, title, parent_id):
+        safe = self.escape_query_string(title)
+        try:
+            return bool(self.drive.ListFile(
+                {"q": f"title='{safe}' and '{parent_id}' in parents and trashed=false"}
+            ).GetList())
+        except Exception:
+            return False
+
+    def _upload_file(self, local_path, title, parent_id, existing_id=None):
+        """Sube un fichero con reintentos. True si acaba en Drive.
+
+        Drive falla de vez en cuando con un 500 o una respuesta vacía. Antes de
+        repetir una creación se comprueba si el fichero llegó pese al error,
+        para no dejarlo duplicado.
+        """
+        for delay in (*RETRY_DELAYS, None):
+            try:
+                meta = {"id": existing_id} if existing_id else {"title": title, "parents": [{"id": parent_id}]}
+                gfile = self.drive.CreateFile(meta)
+                gfile.SetContentFile(local_path)
+                gfile.Upload()
+                return True
+            except Exception as e:
+                print(f"      Error subiendo {title}: {type(e).__name__}: {e}")
+                if delay is None:
+                    return False
+                time.sleep(delay)
+                if not existing_id and self._exists(title, parent_id):
+                    print("      (había llegado a Drive pese al error)")
+                    return True
+        return False
+
+    @staticmethod
+    def _count_pdfs(local_path):
+        return sum(fn.endswith(".pdf") for _, _, files in os.walk(local_path) for fn in files)
+
     def upload_recursive(self, local_path, current_parent_drive_id):
         drive_items = {}
         try:
-            file_list = self.drive.ListFile(
-                {"q": f"'{current_parent_drive_id}' in parents and trashed=false"}
-            ).GetList()
+            file_list = with_retries(
+                lambda: self.drive.ListFile(
+                    {"q": f"'{current_parent_drive_id}' in parents and trashed=false"}
+                ).GetList(),
+                "Error listando contenidos de carpeta",
+            )
             for item in file_list:
                 drive_items[item["title"]] = item
         except Exception as e:
-            print(f"   Error listando contenidos de carpeta: {e}")
+            # Los PDFs de esta carpeta se quedan sin subir: se cuentan como
+            # error (antes se saltaban en silencio) y reconcile.py los
+            # reencola en el siguiente run.
+            n = self._count_pdfs(local_path)
+            print(f"   Error listando contenidos de carpeta: {e} ({n} PDFs sin subir)")
+            self.errors += n
             return
 
         for item_name in os.listdir(local_path):
@@ -70,7 +118,13 @@ class GDriveUploader:
                         and drive_items[item_name]["mimeType"] == "application/vnd.google-apps.folder"):
                     drive_folder_id = drive_items[item_name]["id"]
                 else:
-                    drive_folder_id = self.find_or_create_folder(item_name, current_parent_drive_id)
+                    try:
+                        drive_folder_id = self.find_or_create_folder(item_name, current_parent_drive_id)
+                    except Exception as e:
+                        n = self._count_pdfs(local_item_path)
+                        print(f"   No se pudo abrir/crear la carpeta en Drive: {e} ({n} PDFs sin subir)")
+                        self.errors += n
+                        continue
                 self.upload_recursive(local_item_path, drive_folder_id)
             else:
                 if not item_name.endswith(".pdf"):
@@ -84,16 +138,9 @@ class GDriveUploader:
                     continue
 
                 print(f"   Subiendo nuevo: {item_name}")
-                try:
-                    gfile = self.drive.CreateFile({
-                        "title": item_name,
-                        "parents": [{"id": current_parent_drive_id}],
-                    })
-                    gfile.SetContentFile(local_item_path)
-                    gfile.Upload()
+                if self._upload_file(local_item_path, item_name, current_parent_drive_id):
                     self.pdfs += 1
-                except Exception as e:
-                    print(f"      Error subiendo archivo: {e}")
+                else:
                     self.errors += 1
 
     def _resolve_main_folder(self):
@@ -114,38 +161,29 @@ class GDriveUploader:
 
         if os.path.exists(LISTS_FOLDER):
             print(f"\nSincronizando archivos de configuración e histórico ({LISTS_FOLDER})...")
+            # Sin el listado no se sabe qué ficheros existen ya: subirlos a
+            # ciegas los duplicaría. Se relanza y el paso falla; el estado de
+            # Drive queda como estaba y el siguiente run repite el trabajo.
             lists_drive_folder_id = self.find_or_create_folder(LISTS_FOLDER, main_drive_folder_id)
-
-            drive_lists_items = {}
-            try:
-                file_list = self.drive.ListFile(
+            file_list = with_retries(
+                lambda: self.drive.ListFile(
                     {"q": f"'{lists_drive_folder_id}' in parents and trashed=false"}
-                ).GetList()
-                for item in file_list:
-                    drive_lists_items[item["title"]] = item
-            except Exception as e:
-                print(f"   Error listando contenidos de 'lists' en Drive: {e}")
+                ).GetList(),
+                "Error listando 'lists' en Drive",
+            )
+            drive_lists_items = {item["title"]: item for item in file_list}
 
             for item_name in os.listdir(LISTS_FOLDER):
                 file_path = os.path.join(LISTS_FOLDER, item_name)
                 if item_name == RUN_LOG_NAME:
                     continue  # lo gestiona save_log.py
                 if os.path.isfile(file_path):
-                    try:
-                        if item_name in drive_lists_items:
-                            print(f"   Actualizando: {item_name} en Drive")
-                            gfile = self.drive.CreateFile({"id": drive_lists_items[item_name]["id"]})
-                        else:
-                            print(f"   Subiendo nuevo: {item_name} a Drive")
-                            gfile = self.drive.CreateFile({
-                                "title": item_name,
-                                "parents": [{"id": lists_drive_folder_id}],
-                            })
-                        gfile.SetContentFile(file_path)
-                        gfile.Upload()
+                    existing = drive_lists_items.get(item_name)
+                    print(f"   {'Actualizando' if existing else 'Subiendo nuevo'}: {item_name}")
+                    if self._upload_file(file_path, item_name, lists_drive_folder_id,
+                                         existing_id=existing["id"] if existing else None):
                         self.state_files += 1
-                    except Exception as e:
-                        print(f"   Error subiendo {item_name}: {e}")
+                    else:
                         self.errors += 1
         else:
             public(f"\nNo se encontró la carpeta local '{LISTS_FOLDER}'. Se omitirá su respaldo.")

@@ -6,7 +6,8 @@ name: recover-missing
 
 on:
   schedule:
-    # 22:00 UTC — lejos del pipeline principal (04:00) para no solaparse.
+    # 22:00 UTC. En invierno coincide con el disparo de las 23:00 de Madrid
+    # del pipeline principal; no chocan porque comparten grupo de concurrencia.
     - cron: "0 22 * * *"
   workflow_dispatch:
     inputs:

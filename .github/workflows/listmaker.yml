@@ -94,6 +94,8 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 330  # ~5.5h, deja margen al límite de 6h del runner
+    outputs:
+      reconcile_blocked: ${{ steps.reconcile.outputs.blocked }}
 
     # Solo un run a la vez (compartido con recover/audit/backfill/rename).
     # Va a nivel de job y no de workflow: asi el disparo de la otra estacion,
@@ -121,6 +123,9 @@ jobs:
       GDRIVE_TOKEN_ISSUED: ${{ vars.GDRIVE_TOKEN_ISSUED }}
       # Caducidad del token de GitHub que usa cron-job.org (se apunta a mano).
       CRONJOB_PAT_EXPIRES: ${{ vars.CRONJOB_PAT_EXPIRES }}
+      # Solo para una instalacion nueva (sin history.json en Drive): poner la
+      # variable a 1 para el primer run y borrarla despues.
+      ALLOW_FIRST_RUN: ${{ vars.ALLOW_FIRST_RUN }}
       # El repo y sus logs son publicos: el detalle (autores, hilos, capitulos)
       # va a logs/run_log.txt y de ahi a Drive; aqui solo salen contadores.
       PRIVATE_LOG: "1"
@@ -144,6 +149,14 @@ jobs:
       - name: Download state from Drive
         id: download
         run: python scripts/download.py
+
+      # Autorreparacion: lo que salio en algun delta y no tiene PDF en Drive
+      # (subida fallida, writer que no arranco...) vuelve a pending y el
+      # writer lo descarga en este mismo run. Solo lee Drive, no toca el foro.
+      - name: Requeue chapters missing in Drive
+        id: reconcile
+        continue-on-error: true
+        run: python scripts/reconcile.py
 
       # Continue-on-error: aunque scrape falle (p.ej. rate-limit, exit 3), el entry point ya
       # ejecuta save_and_compare_history en el finally, así que deltas.jsonl/history.json
@@ -208,6 +221,7 @@ jobs:
       FORUM_COOKIES_B64: ${{ secrets.FORUM_COOKIES_B64 }}
       GDRIVE_TOKEN_ISSUED: ${{ vars.GDRIVE_TOKEN_ISSUED }}
       CRONJOB_PAT_EXPIRES: ${{ vars.CRONJOB_PAT_EXPIRES }}
+      RECONCILE_BLOCKED: ${{ needs.run.outputs.reconcile_blocked }}
     steps:
       - uses: actions/checkout@v7
       # Solo biblioteca estandar: vale el python3 que trae el runner.
