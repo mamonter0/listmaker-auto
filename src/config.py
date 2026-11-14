@@ -30,6 +30,16 @@ PENDING_CHAPTERS_FILE = os.path.join(LIST_DIR, "pending_chapters.json")
 PENDING_ATTEMPTS_FILE = os.path.join(LIST_DIR, "pending_attempts.json")
 LOST_CHAPTERS_FILE = os.path.join(LIST_DIR, "lost_chapters.json")
 MAX_CHAPTER_ATTEMPTS = 5
+# Autorreparación (scripts/reconcile.py): capítulos que salieron en algún delta
+# y no tienen PDF en Drive vuelven a pending. Si de golpe faltan más de
+# RECONCILE_MAX no se reencola nada: sería un fallo al listar Drive, no huecos
+# reales, y reencolarlos martillearía el foro.
+RECONCILE_STATUS_FILE = os.path.join(LIST_DIR, "reconcile_status.json")
+RECONCILE_MAX = 25
+# Tiempo máximo de carga de una página. Tiene que quedar por debajo de los
+# 120 s del cliente HTTP de Selenium: si no, un Chrome colgado salta como
+# ReadTimeoutError (no es WebDriverException) y tumba el run entero.
+PAGE_LOAD_TIMEOUT = 100
 
 LOCAL_FOLDER = "Artists"
 DRIVE_TARGET_FOLDER = "Artists"

@@ -22,17 +22,19 @@ credenciales, diagnóstico, cómo replicarlo) es privada y vive en Drive.
 gate     decide si este disparo se ejecuta (estación correcta, sin run reciente)
   │
   ▼
-run      download → scrape → write → upload → informes → log privado
+run      download → reconcile → scrape → write → upload → informes → log privado
   │
   ▼
 avisos   falla a propósito (email de GitHub) si una credencial caduca pronto
+         o si la autorreparación encuentra demasiados huecos
 ```
 
 Dentro de `run`:
 
 | Paso | Script | Qué hace |
 |---|---|---|
-| Download | `scripts/download.py` | Baja de Drive el estado (`lists/`) |
+| Download | `scripts/download.py` | Baja de Drive el estado (`lists/`); si no lo consigue entero, el run se para |
+| Reconcile | `scripts/reconcile.py` | Reencola lo que salió en algún delta y no tiene PDF en Drive (solo lee Drive) |
 | Scrape | `scripts/scrape.py` | Recorre los perfiles y genera el delta (`deltas.jsonl`) |
 | Write | `scripts/write.py` | Descarga como PDF los capítulos nuevos y los pendientes |
 | Upload | `scripts/upload.py` | Sube PDFs y estado a Drive |

@@ -3,12 +3,14 @@ import os
 from .config import (
     ARTISTS_FOLDER_ID,
     DRIVE_TARGET_FOLDER,
+    HISTORY_FILE,
     LISTS_FOLDER,
     LOCAL_FOLDER,
     PARENT_DRIVE_ID,
     RUN_LOG_NAME,
 )
 from .drive_auth import get_drive
+from .drive_lists import with_retries
 from .runlog import public
 
 
@@ -26,11 +28,15 @@ class GDriveDownloader:
             f"and mimeType='application/vnd.google-apps.folder' and trashed=false"
         )
         try:
-            file_list = self.drive.ListFile({"q": query}).GetList()
+            file_list = with_retries(
+                lambda: self.drive.ListFile({"q": query}).GetList(),
+                f"Error buscando carpeta '{folder_name}' en Drive",
+            )
             if file_list:
                 return file_list[0]["id"]
         except Exception as e:
             print(f"   Error buscando carpeta '{folder_name}' en Drive: {e}")
+            self.errors += 1
         return None
 
     def download_recursive(self, drive_folder_id, local_path, skip_folder_names=None, force_overwrite=False):
@@ -40,9 +46,12 @@ class GDriveDownloader:
         os.makedirs(local_path, exist_ok=True)
 
         try:
-            file_list = self.drive.ListFile(
-                {"q": f"'{drive_folder_id}' in parents and trashed=false"}
-            ).GetList()
+            file_list = with_retries(
+                lambda: self.drive.ListFile(
+                    {"q": f"'{drive_folder_id}' in parents and trashed=false"}
+                ).GetList(),
+                "Error listando contenidos de Drive",
+            )
         except Exception as e:
             print(f"   Error listando contenidos de Drive: {e}")
             self.errors += 1
@@ -66,7 +75,8 @@ class GDriveDownloader:
                     else:
                         print(f"   Descargando nuevo: {item_name}")
                     try:
-                        item.GetContentFile(item_path)
+                        with_retries(lambda: item.GetContentFile(item_path),
+                                     f"Error descargando {item_name}")
                         self.downloaded += 1
                     except Exception as e:
                         print(f"      Error descargando archivo: {e}")
@@ -90,7 +100,7 @@ class GDriveDownloader:
             main_drive_folder_id = self.find_folder_in_drive(DRIVE_TARGET_FOLDER, PARENT_DRIVE_ID)
         if not main_drive_folder_id:
             public(f"Error: No se encontró la carpeta '{DRIVE_TARGET_FOLDER}' en Google Drive.")
-            return
+            return False
 
         lists_drive_folder_id = self.find_folder_in_drive(LISTS_FOLDER, main_drive_folder_id)
         if lists_drive_folder_id:
@@ -100,3 +110,14 @@ class GDriveDownloader:
             public(f"\nNo se encontró la carpeta '{LISTS_FOLDER}' respaldada en Drive.")
 
         public(f"Estado descargado de Drive: {self.downloaded} ficheros, {self.errors} errores.")
+
+        # Con el estado a medias no se sigue. Sin history.json el scraper
+        # creería que es la primera ejecución, daría todo por nuevo y el writer
+        # intentaría descargar miles de capítulos del foro.
+        if self.errors:
+            public("Hubo errores al bajar el estado: se aborta para no trabajar con datos a medias.")
+            return False
+        if not os.path.exists(HISTORY_FILE) and os.environ.get("ALLOW_FIRST_RUN") != "1":
+            public("No hay history.json en Drive. Si es una instalación nueva, define ALLOW_FIRST_RUN=1.")
+            return False
+        return True

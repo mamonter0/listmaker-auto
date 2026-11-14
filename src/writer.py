@@ -28,6 +28,7 @@ from .config import (
     LOCAL_FOLDER,
     LOST_CHAPTERS_FILE,
     MAX_CHAPTER_ATTEMPTS,
+    PAGE_LOAD_TIMEOUT,
     MAX_PAGES_PER_LOOP,
     PENDING_ATTEMPTS_FILE,
     PENDING_CHAPTERS_FILE,
@@ -48,6 +49,7 @@ class Writer:
         self.attempts = self._load_json(PENDING_ATTEMPTS_FILE, {})
         self.lost = self._load_json(LOST_CHAPTERS_FILE, [])
         self._failed_now = []  # (clave, artista, hilo, capítulo) que no dieron PDF este run
+        self._gone_now = []    # (artista, hilo) que ya no salen en el perfil del autor
         self._build_driver()
 
     def _build_driver(self):
@@ -61,6 +63,7 @@ class Writer:
         options.add_experimental_option("useAutomationExtension", False)
         options.add_argument("--enable-print-browser")
         self.driver = webdriver.Chrome(options=options)
+        self.driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
         self.wait = WebDriverWait(self.driver, 20)
 
     def _driver_alive(self):
@@ -145,7 +148,23 @@ class Writer:
         if not os.path.exists(COOKIES_FILE):
             print(f"Error: No se encuentra {COOKIES_FILE}")
             return False
-        self.driver.get(BASE_URL)
+        # Chrome a veces se queda colgado en la primera carga. Un navegador
+        # nuevo suele bastar; si vuelve a fallar se devuelve False en vez de
+        # dejar escapar la excepción (tumbaba el run sin guardar nada).
+        try:
+            self.driver.get(BASE_URL)
+        except Exception as e:
+            public(f"La portada no cargó ({type(e).__name__}); reinicio Chrome y reintento.")
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            try:
+                self._build_driver()
+                self.driver.get(BASE_URL)
+            except Exception as e2:
+                public(f"La portada sigue sin cargar ({type(e2).__name__}).")
+                return False
         time.sleep(1)
         try:
             with open(COOKIES_FILE, "rb") as f:
@@ -317,6 +336,7 @@ class Writer:
         capítulos: no se cuenta, para no dar por perdida media cola por una
         avería de unos días.
         """
+        self._count_gone_threads(pending)
         if not self._failed_now:
             return
         if self.saved == 0 and len(self._failed_now) > 3:
@@ -332,6 +352,27 @@ class Writer:
                 self.attempts[key] = n
         if lost:
             public(f"{lost} capítulos dados por perdidos tras {MAX_CHAPTER_ATTEMPTS} intentos (ver {LOST_CHAPTERS_FILE}).")
+
+    def _count_gone_threads(self, pending):
+        """Hilos en cola que ya no aparecen en el perfil (borrados o renombrados).
+
+        Antes se quedaban pendientes para siempre. Solo se cuentan cuando la
+        lista de hilos del autor sí se pudo leer; tras MAX_CHAPTER_ATTEMPTS
+        runs sin aparecer, sus capítulos pasan a lost_chapters.json.
+        """
+        lost = 0
+        for artist, thread in self._gone_now:
+            key = f"{artist}|{thread}|*"
+            n = self.attempts.get(key, 0) + 1
+            if n < MAX_CHAPTER_ATTEMPTS:
+                self.attempts[key] = n
+                continue
+            self.attempts.pop(key, None)
+            for chapter in list(pending.get(artist, {}).get(thread, [])):
+                self._mark_lost(pending, artist, thread, chapter, "el hilo ya no está en el perfil del autor")
+                lost += 1
+        if lost:
+            public(f"{lost} capítulos dados por perdidos: su hilo ya no existe (ver {LOST_CHAPTERS_FILE}).")
 
     def _save_attempts(self):
         for path, data in ((PENDING_ATTEMPTS_FILE, self.attempts), (LOST_CHAPTERS_FILE, self.lost)):
@@ -783,8 +824,9 @@ class Writer:
 
     def run(self):
         if not self.load_cookies():
-            public("Writer: no se pudieron cargar las cookies.")
-            return
+            # Fallo, no "nada que hacer": antes salía con código 0 y el paso
+            # quedaba en verde sin haber descargado nada.
+            raise RuntimeError("el writer no pudo cargar las cookies")
 
         # Estrategia de queue:
         # 1. Cargamos pending_chapters.json (capítulos que fallaron en runs previos).
@@ -848,7 +890,10 @@ class Writer:
                     if thread_title not in known_threads:
                         print(f"   Hilo no encontrado en perfil: '{thread_title}'")
                         threads_missing += 1
+                        if known_threads:  # el perfil se leyó: el hilo no está
+                            self._gone_now.append((artist_name, thread_title))
                         continue
+                    self.attempts.pop(f"{artist_name}|{thread_title}|*", None)
 
                     thread_base_url = known_threads[thread_title]
                     print(f"   Thread: {thread_title}")
